@@ -2,36 +2,66 @@
 //  SessionExerciseEditorView.swift
 //  Muscu
 //
-//  Vue d’édition complète d’un SessionExercise (présentée en sheet depuis DayEditorView).
+//  Rôle : Formulaire d'édition complète d'un SessionExercise (exercice de base, séries, repos, charge).
+//  DA Elite Athlete : ScrollView + cartes, accentColor, fond adaptatif.
 //
 
 import SwiftUI
 import SwiftData
 
+private let SessionEditorBgDark = Color(red: 15/255, green: 17/255, blue: 21/255)
+private let SessionEditorCardDark = Color(red: 28/255, green: 31/255, blue: 38/255)
+
 struct SessionExerciseEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
+    @Environment(\.textOnAccentColor) private var textOnAccentColor
     @Bindable var sessionExercise: SessionExercise
 
     @State private var showExercisePicker = false
 
+    private var pageBackground: Color {
+        colorScheme == .dark ? SessionEditorBgDark : Color(.systemGroupedBackground)
+    }
+    private var cardBackground: Color {
+        colorScheme == .dark ? SessionEditorCardDark : Color(.secondarySystemGroupedBackground)
+    }
+    private var cardBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.gray.opacity(0.2)
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                exerciseSection
-                volumeSection
-                loadSection
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    exerciseCard
+                    volumeCard
+                    loadCard
+                }
+                .padding(20)
+                .padding(.bottom, 40)
             }
+            .scrollContentBackground(.hidden)
+            .background(pageBackground)
             .navigationTitle("Modifier l’exercice")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Annuler") { dismiss() }
+                        .foregroundStyle(accentColor)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Enregistrer") {
                         saveAndDismiss()
                     }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(colorScheme == .light ? .black : textOnAccentColor)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(accentColor)
+                    .clipShape(Capsule())
                 }
             }
             .sheet(isPresented: $showExercisePicker) {
@@ -43,17 +73,18 @@ struct SessionExerciseEditorView: View {
         }
     }
 
-    // MARK: - Section Exercice de base
-
-    private var exerciseSection: some View {
-        Section {
+    private var exerciseCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Exercice")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
             if let master = sessionExercise.exercise {
                 HStack(spacing: 14) {
                     Image(systemName: master.visualAsset)
                         .font(.title2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(accentColor)
                         .frame(width: 48, height: 48)
-                        .background(Color(.tertiarySystemFill))
+                        .background(accentColor.opacity(0.15))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(master.name)
@@ -66,58 +97,80 @@ struct SessionExerciseEditorView: View {
                     }
                     Spacer()
                 }
-                .padding(.vertical, 4)
-
                 Button {
                     showExercisePicker = true
                 } label: {
                     Label("Changer l’exercice", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.subheadline)
+                        .foregroundStyle(accentColor)
                 }
             } else {
                 Button {
                     showExercisePicker = true
                 } label: {
                     Label("Choisir un exercice", systemImage: "plus.circle.fill")
+                        .font(.headline)
+                        .foregroundStyle(colorScheme == .light ? .black : textOnAccentColor)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+                .buttonStyle(.plain)
             }
-        } header: {
-            Text("Exercice")
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 
-    // MARK: - Section Volume / Paramètres de séance
-
-    private var volumeSection: some View {
-        Section {
+    private var volumeCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Paramètres de séance")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
             Stepper("Séries : \(sessionExercise.sets)", value: $sessionExercise.sets, in: 1...20)
+                .tint(accentColor)
             TextField("Reps (ex: 10, 8-12, Failure)", text: $sessionExercise.reps)
+                .textFieldStyle(.roundedBorder)
                 .keyboardType(.default)
             Stepper("Repos : \(sessionExercise.restTime) s", value: $sessionExercise.restTime, in: 0...300, step: 15)
-        } header: {
-            Text("Paramètres de séance")
+                .tint(accentColor)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 
-    // MARK: - Section Charge
-
-    private var loadSection: some View {
-        Section {
+    private var loadCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Charge")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
             Picker("Stratégie de charge", selection: $sessionExercise.loadStrategy) {
                 ForEach(LoadStrategy.allCases, id: \.self) { s in
                     Text(loadStrategyLabel(s)).tag(s)
                 }
             }
             .pickerStyle(.menu)
-
+            .accentColor(accentColor)
             HStack {
                 Text(loadValueLabel)
                 TextField("0", value: $sessionExercise.loadValue, format: .number)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.roundedBorder)
             }
-        } header: {
-            Text("Charge")
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(cardBorder, lineWidth: 0.5))
     }
 
     private var loadValueLabel: String {

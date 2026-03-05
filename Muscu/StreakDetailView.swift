@@ -2,7 +2,8 @@
 //  StreakDetailView.swift
 //  Muscu
 //
-//  Détail de la série (streak) : en-tête, historique des semaines, séances manquées, jours engagés.
+//  Rôle : Détail du streak (série de jours, historique semaines, séances manquées, jours engagés).
+//  Utilisé par : WorkoutView (NavigationLink depuis StreakCardView).
 //
 
 import SwiftUI

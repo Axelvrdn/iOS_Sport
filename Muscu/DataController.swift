@@ -2,7 +2,8 @@
 //  DataController.swift
 //  Muscu
 //
-//  Gère le conteneur SwiftData et le seeding du programme par défaut.
+//  Rôle : Seeding (createDefaultProgram, createNewProgram, seedExerciseLibrary), suppression (deleteAll) des données atomiques.
+//  Utilisé par : MuscuApp (RootView), NewProgramSheet, ProgramEditorEmptyView.
 //
 
 import Foundation
@@ -36,8 +37,9 @@ final class DataController {
         }
     }
 
-    /// Crée le programme "Programme Athlétique" si la base ne contient aucun programme.
-    /// 100 % atomique : SessionRecipe + SessionExercise → ExerciseMaster (aucun legacy Exercise).
+    /// Crée le programme "Programme Volley & Détente" (8 semaines) **uniquement si la base ne contient aucun programme**.
+    /// Ne jamais appeler si des données existent (évite doublons et corruptions).
+    /// 100 % atomique : TrainingProgram → TrainingWeek → TrainingDay → SessionRecipe → SessionExercise → ExerciseMaster.
     static func createDefaultProgram(context: ModelContext) async {
         print("[DataController] createDefaultProgram called")
 
@@ -48,32 +50,28 @@ final class DataController {
             return
         }
 
-        print("[DataController] createDefaultProgram: starting seeding...")
+        print("[DataController] createDefaultProgram: starting Programme Athlétique Volley seeding...")
 
-        // 1) Bibliothèque d’exercices (20 ExerciseMaster)
-        await seedExerciseLibraryAndSampleSession(context: context)
-
-        let masterFetch = FetchDescriptor<ExerciseMaster>()
-        let allMasters = (try? context.fetch(masterFetch)) ?? []
-        let mastersByName: [String: ExerciseMaster] = Dictionary(uniqueKeysWithValues: allMasters.map { ($0.name, $0) })
+        // 1) Bibliothèque d’exercices (ExerciseMaster)
+        let mastersByName = await createExerciseLibrary(context: context)
 
         let program = TrainingProgram(
-            name: "Programme Athlétique",
-            programDescription: "Programme athlétique 2 mois – Auteur: Betterball_ben",
-            sportCategoriesString: "bodybuilding,general"
+            name: "Programme Athlétique Volley",
+            programDescription: "8 semaines – Haut du corps, bas du corps, pliométrie et détente. Semaines impaires = Dimanche A, paires = Dimanche B.",
+            sportCategoriesString: "volley,general"
         )
         context.insert(program)
 
-        let totalWeeks = 8
-        let dayCount = 7
-        for weekNumber in 1...totalWeeks {
+        let builder = VolleyProgramBuilder(context: context, masters: mastersByName)
+
+        for weekNumber in 1...8 {
             let week = TrainingWeek(weekNumber: weekNumber)
             week.program = program
             context.insert(week)
             program.weeks.append(week)
 
-            for dayIndex in 0..<dayCount {
-                let (isRest, focus, title) = dayConfig(dayIndex: dayIndex)
+            for dayIndex in 0..<7 {
+                let (isRest, focus, title) = VolleyProgramBuilder.dayConfig(dayIndex: dayIndex)
                 let day = TrainingDay(
                     dayIndex: dayIndex,
                     isRestDay: isRest,
@@ -86,256 +84,159 @@ final class DataController {
             }
         }
 
-        func week(_ n: Int) -> TrainingWeek? {
-            program.weeks.first { $0.weekNumber == n }
-        }
-        func day(in w: TrainingWeek, _ idx: Int) -> TrainingDay? {
-            w.days.first { $0.dayIndex == idx }
-        }
+        let weeks = program.weeks.sorted { $0.weekNumber < $1.weekNumber }
+        for w in weeks {
+            let block = VolleyProgramBuilder.block(for: w.weekNumber)
+            let days = w.days.sorted { $0.dayIndex < $1.dayIndex }
+            guard days.count == 7 else { continue }
 
-        /// Ajoute un SessionExercise à une SessionRecipe en récupérant l’ExerciseMaster par nom.
-        func addSessionExercise(
-            to recipe: SessionRecipe,
-            masterName: String,
-            sets: Int,
-            reps: String,
-            restTime: Int,
-            masters: [String: ExerciseMaster]
-        ) {
-            guard let master = masters[masterName] else { return }
-            let se = SessionExercise(
-                sets: sets,
-                reps: reps,
-                restTime: restTime,
-                loadStrategy: .fixedWeight,
-                loadValue: 0
-            )
-            context.insert(se)
-            se.exercise = master
-            se.session = recipe
-            recipe.exercises.append(se)
+            let d0 = days[0], d1 = days[1], d2 = days[2], d3 = days[3], d4 = days[4], d5 = days[5], d6 = days[6]
+
+            d2.isRestDay = true
+            d2.focusCategory = .none
+            d2.title = "Repos total"
+
+            builder.attachRecipe(to: d3, name: "Entraînement Volley", goal: .technique, bodyFocus: .fullBody, lines: VolleyProgramBuilder.jeudiVolleyLine())
+
+            d5.isRestDay = false
+            d5.focusCategory = .hybrid
+            d5.title = "Repos Actif (Mobilité)"
+            builder.attachRecipe(to: d5, name: "Repos Actif (Mobilité)", goal: .rehab, bodyFocus: .fullBody, lines: VolleyProgramBuilder.samediMobiliteLines())
+
+            let isOddWeek = (w.weekNumber % 2) == 1
+            builder.fillWeek(weekNumber: w.weekNumber, block: block, isOddWeek: isOddWeek, d0: d0, d1: d1, d4: d4, d6: d6)
         }
 
-        /// Jours Lower (Phase 1) : recette + exercices depuis la bibliothèque.
-        func attachLowerRecipe(to day: TrainingDay) {
-            let recipe = SessionRecipe(
-                name: day.title,
-                goal: .strength,
-                bodyFocus: .lower,
-                sportCategoriesString: "bodybuilding,general"
-            )
-            context.insert(recipe)
-            recipe.day = day
-            day.sessionRecipe = recipe
-
-            let items: [(String, Int, String, Int)] = [
-                ("Incline Knee Raises", 3, "10", 30),
-                ("Vertical Jump", 3, "7", 75),
-                ("Back Squat", 3, "8", 90),
-                ("Air Squat", 3, "12", 60),
-                ("Lunges", 3, "8", 60),
-                ("Romanian Deadlift", 3, "8", 90),
-                ("Glute Bridge", 3, "30s", 60),
-                ("Calf Raises", 3, "8", 60),
-            ]
-            for (name, sets, reps, rest) in items {
-                addSessionExercise(to: recipe, masterName: name, sets: sets, reps: reps, restTime: rest, masters: mastersByName)
-            }
-        }
-
-        /// Jours Upper : recette + exercices.
-        func attachUpperRecipe(to day: TrainingDay) {
-            let recipe = SessionRecipe(
-                name: day.title,
-                goal: .volume,
-                bodyFocus: .upper,
-                sportCategoriesString: "bodybuilding,general"
-            )
-            context.insert(recipe)
-            recipe.day = day
-            day.sessionRecipe = recipe
-
-            let items: [(String, Int, String, Int)] = [
-                ("Bench Press", 3, "10", 90),
-                ("Push-Up", 3, "10", 90),
-                ("Military Press", 3, "10", 90),
-                ("Lat Pulldown", 3, "10", 90),
-                ("Barbell Row", 3, "10", 90),
-                ("Plank", 3, "30s", 45),
-                ("Pallof Press", 3, "30s", 45),
-                ("Dead Bug", 3, "8", 45),
-            ]
-            for (name, sets, reps, rest) in items {
-                addSessionExercise(to: recipe, masterName: name, sets: sets, reps: reps, restTime: rest, masters: mastersByName)
-            }
-        }
-
-        /// Jour Athletic / Plyométrie.
-        func attachAthleticRecipe(to day: TrainingDay) {
-            let recipe = SessionRecipe(
-                name: day.title,
-                goal: .technique,
-                bodyFocus: .fullBody,
-                sportCategoriesString: "bodybuilding,general"
-            )
-            context.insert(recipe)
-            recipe.day = day
-            day.sessionRecipe = recipe
-
-            let items: [(String, Int, String, Int)] = [
-                ("Sprint 30m", 3, "2", 60),
-                ("Lateral Shuffle", 3, "20s", 30),
-                ("Vertical Jump", 3, "7", 75),
-                ("Burpees", 3, "10", 60),
-            ]
-            for (name, sets, reps, rest) in items {
-                addSessionExercise(to: recipe, masterName: name, sets: sets, reps: reps, restTime: rest, masters: mastersByName)
-            }
-        }
-
-        /// Jours Lower Phase 2 (semaines 5–8, jour 0).
-        func attachLowerPhase2Recipe(to day: TrainingDay) {
-            day.title = "Lower Body (Phase 2)"
-            let recipe = SessionRecipe(
-                name: day.title,
-                goal: .strength,
-                bodyFocus: .lower,
-                sportCategoriesString: "bodybuilding,general"
-            )
-            context.insert(recipe)
-            recipe.day = day
-            day.sessionRecipe = recipe
-
-            let items: [(String, Int, String, Int)] = [
-                ("Back Squat", 3, "5", 90),
-                ("Vertical Jump", 3, "5", 90),
-                ("Bulgarian Split Squat", 3, "7", 90),
-                ("Lunges", 3, "6", 90),
-                ("Glute Bridge", 3, "20s", 90),
-                ("Plank", 3, "30s", 60),
-            ]
-            for (name, sets, reps, rest) in items {
-                addSessionExercise(to: recipe, masterName: name, sets: sets, reps: reps, restTime: rest, masters: mastersByName)
-            }
-        }
-
-        // Remplir chaque semaine
-        for weekNumber in 1...totalWeeks {
-            guard let w = week(weekNumber) else { continue }
-            if let d0 = day(in: w, 0) {
-                d0.isRestDay = false
-                d0.focusCategory = .lowerBody
-                d0.title = "Lower Body"
-                if weekNumber >= 5 {
-                    attachLowerPhase2Recipe(to: d0)
-                } else {
-                    attachLowerRecipe(to: d0)
-                }
-            }
-            if let d1 = day(in: w, 1) {
-                d1.isRestDay = false
-                d1.focusCategory = .upperBody
-                d1.title = "Upper Body"
-                attachUpperRecipe(to: d1)
-            }
-            if let d2 = day(in: w, 2) {
-                d2.isRestDay = false
-                d2.focusCategory = .plyometrics
-                d2.title = "Athletic / Plyometrics"
-                attachAthleticRecipe(to: d2)
-            }
-            if let d3 = day(in: w, 3) {
-                d3.isRestDay = true
-                d3.focusCategory = .none
-                d3.title = "Repos"
-            }
-            if let d4 = day(in: w, 4) {
-                d4.isRestDay = false
-                d4.focusCategory = .lowerBody
-                d4.title = "Lower Body"
-                attachLowerRecipe(to: d4)
-            }
-            if let d5 = day(in: w, 5) {
-                d5.isRestDay = false
-                d5.focusCategory = .upperBody
-                d5.title = "Upper Body"
-                attachUpperRecipe(to: d5)
-            }
-            if let d6 = day(in: w, 6) {
-                d6.isRestDay = true
-                d6.focusCategory = .none
-                d6.title = "Repos"
-            }
-        }
 
         do {
             try context.save()
-            print("[DataController] createDefaultProgram: seeding completed")
+            print("[DataController] createDefaultProgram: Programme Athlétique Volley seeding completed")
         } catch {
             print("[DataController] createDefaultProgram error: \(error)")
         }
     }
 
-    /// Crée la bibliothèque ExerciseMaster (20 exercices courants) pour l’éditeur.
-    /// Ne crée pas de SessionRecipe ; le programme par défaut les attache dans createDefaultProgram.
-    static func seedExerciseLibraryAndSampleSession(context: ModelContext) async {
+    /// Crée la bibliothèque exhaustive d’exercices (Haut, Bas, Plio, Core, Mobilité) et retourne [nom: ExerciseMaster].
+    /// Si des masters existent déjà, retourne le dictionnaire sans rien insérer (évite doublons).
+    static func createExerciseLibrary(context: ModelContext) async -> [String: ExerciseMaster] {
         let fetch = FetchDescriptor<ExerciseMaster>()
         let existing = (try? context.fetch(fetch)) ?? []
-        guard existing.isEmpty else { return }
+        if !existing.isEmpty {
+            return Dictionary(uniqueKeysWithValues: existing.map { ($0.name, $0) })
+        }
 
-        let masters: [(name: String, asset: String, muscles: String, rest: Int)] = [
-            ("Back Squat", "figure.strengthtraining.traditional", "legs", 90),
-            ("Air Squat", "figure.strengthtraining.traditional", "legs", 60),
-            ("Lunges", "figure.strengthtraining.traditional", "legs", 60),
-            ("Romanian Deadlift", "figure.strengthtraining.traditional", "back,legs", 90),
-            ("Glute Bridge", "figure.strengthtraining.traditional", "legs", 60),
-            ("Calf Raises", "figure.strengthtraining.traditional", "legs", 60),
-            ("Bench Press", "figure.strengthtraining.traditional", "chest", 90),
-            ("Push-Up", "figure.strengthtraining.traditional", "chest,arms", 90),
-            ("Military Press", "figure.strengthtraining.traditional", "shoulders", 90),
-            ("Barbell Row", "figure.strengthtraining.traditional", "back", 90),
-            ("Lat Pulldown", "figure.strengthtraining.traditional", "back", 90),
-            ("Plank", "figure.core.training", "core", 45),
-            ("Dead Bug", "figure.core.training", "core", 45),
-            ("Sprint 30m", "figure.run", "legs,fullBody", 60),
-            ("Lateral Shuffle", "figure.run", "legs", 30),
-            ("Vertical Jump", "figure.jumprope", "legs", 75),
-            ("Burpees", "figure.highintensity.intervaltraining", "fullBody", 60),
-            ("Bulgarian Split Squat", "figure.strengthtraining.traditional", "legs", 90),
-            ("Pallof Press", "figure.strengthtraining.traditional", "core", 45),
-            ("Incline Knee Raises", "figure.core.training", "core", 30),
-        ]
-
-        for m in masters {
+        let library = Self.exerciseLibraryEntries()
+        for entry in library {
             let master = ExerciseMaster(
-                name: m.name,
-                visualAsset: m.asset,
+                name: entry.name,
+                visualAsset: "figure.strengthtraining.traditional",
                 videoUrl: nil,
-                exerciseDescription: "Exercice : \(m.name)",
-                musclesTargetedString: m.muscles,
-                defaultRestTime: m.rest
+                exerciseDescription: "Exercice : \(entry.name)",
+                musclesTargetedString: entry.musclesTargetedString,
+                defaultRestTime: 60
             )
             context.insert(master)
         }
 
         do {
             try context.save()
+            print("[DataController] createExerciseLibrary: \(library.count) exercices insérés et sauvegardés.")
         } catch {
-            print("Erreur seeding ExerciseMaster: \(error)")
+            print("[DataController] createExerciseLibrary error: \(error)")
         }
+
+        let all = (try? context.fetch(FetchDescriptor<ExerciseMaster>())) ?? []
+        return Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
     }
 
-    private static func dayConfig(dayIndex: Int) -> (Bool, FocusCategory, String) {
-        switch dayIndex {
-        case 0: return (false, .lowerBody, "Lower Body")
-        case 1: return (false, .upperBody, "Upper Body")
-        case 2: return (false, .plyometrics, "Athletic")
-        case 3: return (true, .none, "Repos")
-        case 4: return (false, .lowerBody, "Lower Body")
-        case 5: return (false, .upperBody, "Upper Body")
-        case 6: return (true, .none, "Repos")
-        default: return (true, .none, "Repos")
-        }
+    /// Liste stricte de la bibliothèque : nom exact + catégorie (Haut, Bas, Plio, Core, Mobilité).
+    private static func exerciseLibraryEntries() -> [(name: String, musclesTargetedString: String)] {
+        let haut = "chest,back,shoulders,arms"
+        let bas = "legs"
+        let plio = "fullBody"
+        let core = "core"
+        let mobilite = "fullBody"
+
+        return [
+            // 1. Musculation Haut
+            ("Développé couché haltères", haut),
+            ("Développé couché haltères inclinés", haut),
+            ("Tirage vertical", haut),
+            ("Développé militaire", haut),
+            ("Rowing barre", haut),
+            ("Tractions prise supination", haut),
+            ("Dips", haut),
+            ("Push press", haut),
+            ("Haltères row renegade + pompes", haut),
+            ("Élévations latérales", haut),
+            ("Pompes 1 bras glissées", haut),
+            ("Bent over shoulder raise", haut),
+            ("Pompes explosives + planche large", haut),
+            // 2. Musculation Bas
+            ("Back squat", bas),
+            ("Soulevé de terre roumain", bas),
+            ("Fentes avant en absorption", bas),
+            ("Box squat unilatéral", bas),
+            ("Fentes statiques isométrie avec haltères", bas),
+            ("Élevations mollets haltères", bas),
+            ("Élevations mollets athlétiques", bas),
+            ("Fentes bulgares explosives haltères", bas),
+            ("Fentes latérales haltères", bas),
+            ("Fentes statiques + step up & push press", bas),
+            ("Curl Nordic", bas),
+            ("Step up haltères", bas),
+            ("Pont fessier amplitude", bas),
+            ("FDH pose du sprinter isométrie", bas),
+            // 3. Pliométrie & Vitesse
+            ("Sprint 30m", plio),
+            ("Sprint 40m", plio),
+            ("Sprint 50m", plio),
+            ("Pas fléchis latéraux", plio),
+            ("Accélération / Décélération 3 plots", plio),
+            ("Saut vertical haltères", plio),
+            ("Saut vertical assis haltères", plio),
+            ("Saut vertical pur (CMJ max)", plio),
+            ("Depth jump", plio),
+            ("Broad jump enchaînés", plio),
+            ("Skater jump", plio),
+            ("MB pivot jump", plio),
+            ("Ankle hop frontal + latéral", plio),
+            ("Double rebond alternatif", plio),
+            ("Skater jump + vertical jump unilatéral", plio),
+            ("Saut frontal + saut latéral max", plio),
+            ("Fentes sautées + stabilité", plio),
+            ("Saut latéral explosif à genoux", plio),
+            ("Saut cheville latéral x3", plio),
+            ("Depth jump haltères + saut vertical", plio),
+            ("Décélération rapide", plio),
+            // 4. Core
+            ("Bear Crawl planche superman", core),
+            ("Pallof press", core),
+            ("Dead bug", core),
+            ("Hip Turn Cable Side Chop", core),
+            ("MB fente slam rotation", core),
+            ("Carry Valise", core),
+            ("Rotation de hanche explosive", core),
+            ("Cable pivot row", core),
+            ("Core knee drive", core),
+            ("Planche adducteurs", core),
+            ("Pivot jab swipe + press MB", core),
+            // 5. Mobilité
+            ("Cardio léger", mobilite),
+            ("Entraînement Volley", mobilite),
+            ("Ouvertures thoraciques au sol", mobilite),
+            ("Rotations d'épaules avec élastique", mobilite),
+            ("Étirement des pectoraux", mobilite),
+            ("Étirements poignets", mobilite),
+            ("Squat profond maintenu", mobilite),
+            ("Étirement des fléchisseurs de la hanche", mobilite),
+            ("Dorsiflexion de la cheville", mobilite),
+        ]
+    }
+
+    /// Alias pour compatibilité (RootView appelle seedExerciseLibraryAndSampleSession).
+    static func seedExerciseLibraryAndSampleSession(context: ModelContext) async {
+        _ = await createExerciseLibrary(context: context)
     }
 
     /// Crée un nouveau programme « vierge » avec 1 semaine et 7 jours vides.
@@ -379,5 +280,274 @@ final class DataController {
         }
 
         return program
+    }
+
+    /// Poids suggéré pour un exercice quand la charge est en % du 1RM (loadStrategy == .percentageOfOneRM).
+    /// Utilise ExerciseMaster.estimatedOneRM et le loadValue du SessionExercise (ex: 80 = 80%).
+    static func suggestedWeight(for master: ExerciseMaster?, percentage: Double) -> Double? {
+        guard let master = master, master.estimatedOneRM > 0, percentage > 0 else { return nil }
+        return OneRMHelper.weightForPercentage(of: master.estimatedOneRM, percentage: percentage)
+    }
+}
+
+// MARK: - Volley Programme Builder (8 semaines, atomique uniquement)
+
+private struct VolleyProgramBuilder {
+    let context: ModelContext
+    let masters: [String: ExerciseMaster]
+
+    struct Line {
+        let name: String
+        let sets: Int
+        let reps: String
+        let rest: Int
+    }
+
+    static func block(for weekNumber: Int) -> Int {
+        switch weekNumber {
+        case 1...2: return 1
+        case 3...4: return 2
+        case 5...6: return 3
+        case 7...8: return 4
+        default: return 1
+        }
+    }
+
+    static func dayConfig(dayIndex: Int) -> (Bool, FocusCategory, String) {
+        switch dayIndex {
+        case 0: return (false, .upperBody, "Haut du corps + Core")
+        case 1: return (false, .plyometrics, "Volley + Micro-Pliométrie")
+        case 2: return (true, .none, "Repos total")
+        case 3: return (false, .hybrid, "Entraînement Volley")
+        case 4: return (false, .legs, "Bas du corps 1")
+        case 5: return (false, .hybrid, "Repos Actif (Mobilité)")
+        case 6: return (false, .legs, "Dimanche A/B")
+        default: return (true, .none, "Repos")
+        }
+    }
+
+    func attachRecipe(to day: TrainingDay, name: String, goal: SessionGoal, bodyFocus: BodyFocus, lines: [Line]) {
+        day.title = name
+        day.isRestDay = false
+        let recipe = SessionRecipe(
+            name: name,
+            goal: goal,
+            bodyFocus: bodyFocus,
+            sportCategoriesString: "volley,general"
+        )
+        context.insert(recipe)
+        recipe.day = day
+        day.sessionRecipe = recipe
+        for line in lines {
+            guard let master = masters[line.name] else { continue }
+            let se = SessionExercise(sets: line.sets, reps: line.reps, restTime: line.rest, loadStrategy: .fixedWeight, loadValue: 0)
+            context.insert(se)
+            se.exercise = master
+            se.session = recipe
+            recipe.exercises.append(se)
+        }
+    }
+
+    func fillWeek(weekNumber: Int, block: Int, isOddWeek: Bool, d0: TrainingDay, d1: TrainingDay, d4: TrainingDay, d6: TrainingDay) {
+        let lunLines = Self.lundiLines(block: block)
+        let marLines = Self.mardiLines(block: block)
+        let venLines = Self.vendrediLines(block: block)
+        let dimALines = Self.dimancheALines(block: block)
+        let dimBLines = Self.dimancheBLines()
+
+        attachRecipe(to: d0, name: "Haut du corps + Core", goal: .volume, bodyFocus: .upper, lines: lunLines)
+        d0.focusCategory = .upperBody
+
+        attachRecipe(to: d1, name: "Volley + Micro-Pliométrie", goal: .technique, bodyFocus: .fullBody, lines: marLines)
+        d1.focusCategory = .plyometrics
+
+        attachRecipe(to: d4, name: "Bas du corps 1", goal: .strength, bodyFocus: .lower, lines: venLines)
+        d4.focusCategory = .legs
+
+        if isOddWeek {
+            attachRecipe(to: d6, name: "Bas du corps 2 (Version A)", goal: .strength, bodyFocus: .lower, lines: dimALines)
+        } else {
+            attachRecipe(to: d6, name: "Détente Max (Version B)", goal: .technique, bodyFocus: .lower, lines: dimBLines)
+        }
+        d6.focusCategory = .legs
+    }
+
+    static func lundiLines(block: Int) -> [Line] {
+        switch block {
+        case 1:
+            return [
+                Line(name: "Développé couché haltères", sets: 3, reps: "10", rest: 90),
+                Line(name: "Tirage vertical", sets: 3, reps: "10", rest: 90),
+                Line(name: "Développé militaire", sets: 3, reps: "10", rest: 90),
+                Line(name: "Rowing barre", sets: 3, reps: "10", rest: 90),
+                Line(name: "Tractions prise supination", sets: 3, reps: "MAX", rest: 90),
+                Line(name: "Dips", sets: 3, reps: "MAX", rest: 90),
+                Line(name: "Bear Crawl planche superman", sets: 3, reps: "4", rest: 60),
+                Line(name: "Pallof press", sets: 3, reps: "30s", rest: 45),
+                Line(name: "Dead bug", sets: 3, reps: "8", rest: 45),
+            ]
+        case 2:
+            return [
+                Line(name: "Développé couché haltères", sets: 3, reps: "10", rest: 90),
+                Line(name: "Push press", sets: 3, reps: "8", rest: 90),
+                Line(name: "Haltères row renegade + pompes", sets: 3, reps: "10", rest: 90),
+                Line(name: "Élévations latérales", sets: 3, reps: "10", rest: 90),
+                Line(name: "Hip Turn Cable Side Chop", sets: 2, reps: "8", rest: 60),
+                Line(name: "MB fente slam rotation", sets: 3, reps: "8", rest: 75),
+                Line(name: "Carry Valise", sets: 3, reps: "20s", rest: 60),
+            ]
+        case 3:
+            return [
+                Line(name: "Développé couché haltères inclinés", sets: 3, reps: "7", rest: 105),
+                Line(name: "Pompes 1 bras glissées", sets: 3, reps: "8", rest: 75),
+                Line(name: "Tirage vertical", sets: 3, reps: "12", rest: 90),
+                Line(name: "Développé militaire", sets: 4, reps: "10", rest: 60),
+                Line(name: "Bent over shoulder raise", sets: 3, reps: "8", rest: 60),
+                Line(name: "Dips", sets: 3, reps: "MAX", rest: 90),
+                Line(name: "Tractions prise supination", sets: 3, reps: "MAX", rest: 90),
+                Line(name: "Cable pivot row", sets: 3, reps: "8", rest: 75),
+                Line(name: "Core knee drive", sets: 3, reps: "12", rest: 60),
+            ]
+        case 4:
+            return [
+                Line(name: "Développé couché haltères inclinés", sets: 3, reps: "7", rest: 105),
+                Line(name: "Pompes 1 bras glissées", sets: 3, reps: "8", rest: 75),
+                Line(name: "Tirage vertical", sets: 3, reps: "12", rest: 90),
+                Line(name: "Élévations latérales", sets: 3, reps: "10", rest: 90),
+                Line(name: "Pompes explosives + planche large", sets: 2, reps: "6", rest: 90),
+                Line(name: "Dips", sets: 3, reps: "MAX", rest: 90),
+                Line(name: "Tractions prise supination", sets: 3, reps: "MAX", rest: 90),
+                Line(name: "Cable pivot row", sets: 3, reps: "8", rest: 75),
+                Line(name: "Core knee drive", sets: 3, reps: "12", rest: 60),
+            ]
+        default: return []
+        }
+    }
+
+    static func mardiLines(block: Int) -> [Line] {
+        switch block {
+        case 1:
+            return [
+                Line(name: "Sprint 30m", sets: 3, reps: "2", rest: 60),
+                Line(name: "Pas fléchis latéraux", sets: 3, reps: "20s", rest: 30),
+                Line(name: "Accélération / Décélération 3 plots", sets: 4, reps: "2", rest: 60),
+            ]
+        case 2:
+            return [
+                Line(name: "Sprint 40m", sets: 4, reps: "2", rest: 120),
+                Line(name: "Rotation de hanche explosive", sets: 3, reps: "12", rest: 45),
+                Line(name: "Double rebond alternatif", sets: 3, reps: "5", rest: 90),
+            ]
+        case 3:
+            return [
+                Line(name: "Sprint 30m", sets: 3, reps: "2", rest: 60),
+                Line(name: "Skater jump + vertical jump unilatéral", sets: 3, reps: "6", rest: 75),
+                Line(name: "Saut frontal + saut latéral max", sets: 2, reps: "4", rest: 75),
+            ]
+        case 4:
+            return [
+                Line(name: "Sprint 50m", sets: 5, reps: "1", rest: 90),
+                Line(name: "Saut latéral explosif à genoux", sets: 3, reps: "5", rest: 75),
+                Line(name: "Saut cheville latéral x3", sets: 3, reps: "3", rest: 60),
+            ]
+        default: return []
+        }
+    }
+
+    static func vendrediLines(block: Int) -> [Line] {
+        switch block {
+        case 1:
+            return [
+                Line(name: "Saut vertical haltères", sets: 3, reps: "7", rest: 75),
+                Line(name: "Back squat", sets: 3, reps: "8", rest: 90),
+                Line(name: "Soulevé de terre roumain", sets: 3, reps: "8", rest: 90),
+                Line(name: "Fentes avant en absorption", sets: 3, reps: "8", rest: 60),
+            ]
+        case 2:
+            return [
+                Line(name: "Saut vertical assis haltères", sets: 3, reps: "5", rest: 90),
+                Line(name: "MB pivot jump", sets: 2, reps: "6", rest: 60),
+                Line(name: "Fentes bulgares explosives haltères", sets: 3, reps: "6", rest: 105),
+                Line(name: "Soulevé de terre roumain", sets: 3, reps: "8", rest: 90),
+            ]
+        case 3:
+            return [
+                Line(name: "Back squat", sets: 3, reps: "5", rest: 150),
+                Line(name: "Saut vertical pur (CMJ max)", sets: 3, reps: "5", rest: 150),
+                Line(name: "Fentes bulgares explosives haltères", sets: 3, reps: "7", rest: 105),
+                Line(name: "Depth jump", sets: 3, reps: "6", rest: 90),
+            ]
+        case 4:
+            return [
+                Line(name: "Back squat", sets: 3, reps: "5", rest: 150),
+                Line(name: "Saut vertical pur (CMJ max)", sets: 3, reps: "5", rest: 150),
+                Line(name: "Depth jump haltères + saut vertical", sets: 3, reps: "5", rest: 90),
+                Line(name: "Fentes bulgares explosives haltères", sets: 3, reps: "7", rest: 105),
+            ]
+        default: return []
+        }
+    }
+
+    static func dimancheALines(block: Int) -> [Line] {
+        switch block {
+        case 1:
+            return [
+                Line(name: "FDH pose du sprinter isométrie", sets: 3, reps: "20s", rest: 45),
+                Line(name: "Box squat unilatéral", sets: 3, reps: "8", rest: 60),
+                Line(name: "Fentes statiques isométrie avec haltères", sets: 3, reps: "30s", rest: 60),
+                Line(name: "Élevations mollets haltères", sets: 3, reps: "8", rest: 60),
+                Line(name: "Hip Turn Cable Side Chop", sets: 2, reps: "8", rest: 60),
+            ]
+        case 2:
+            return [
+                Line(name: "Ankle hop frontal + latéral", sets: 3, reps: "20s", rest: 45),
+                Line(name: "Fentes latérales haltères", sets: 3, reps: "7", rest: 75),
+                Line(name: "Décélération rapide", sets: 3, reps: "10", rest: 45),
+                Line(name: "Élevations mollets athlétiques", sets: 3, reps: "8", rest: 60),
+            ]
+        case 3:
+            return [
+                Line(name: "Fentes statiques + step up & push press", sets: 3, reps: "6", rest: 90),
+                Line(name: "Fentes sautées + stabilité", sets: 3, reps: "6", rest: 90),
+                Line(name: "Pont fessier amplitude", sets: 3, reps: "20s", rest: 90),
+                Line(name: "Curl Nordic", sets: 3, reps: "6", rest: 105),
+                Line(name: "Planche adducteurs", sets: 3, reps: "30s", rest: 60),
+            ]
+        case 4:
+            return [
+                Line(name: "Step up haltères", sets: 3, reps: "8", rest: 90),
+                Line(name: "Pivot jab swipe + press MB", sets: 3, reps: "8", rest: 60),
+                Line(name: "Pont fessier amplitude", sets: 3, reps: "20s", rest: 90),
+                Line(name: "Planche adducteurs", sets: 3, reps: "45s", rest: 60),
+            ]
+        default: return []
+        }
+    }
+
+    static func dimancheBLines() -> [Line] {
+        return [
+            Line(name: "Saut vertical pur (CMJ max)", sets: 4, reps: "3", rest: 150),
+            Line(name: "Depth jump", sets: 3, reps: "3", rest: 150),
+            Line(name: "Broad jump enchaînés", sets: 3, reps: "3", rest: 120),
+            Line(name: "Skater jump", sets: 3, reps: "4", rest: 90),
+        ]
+    }
+
+    /// Jeudi : Entraînement Volley (1x1).
+    static func jeudiVolleyLine() -> [Line] {
+        [Line(name: "Entraînement Volley", sets: 1, reps: "1", rest: 60)]
+    }
+
+    /// Samedi : Repos actif mobilité (Bloc 1–4 identique).
+    static func samediMobiliteLines() -> [Line] {
+        [
+            Line(name: "Ouvertures thoraciques au sol", sets: 1, reps: "1", rest: 30),
+            Line(name: "Rotations d'épaules avec élastique", sets: 1, reps: "1", rest: 30),
+            Line(name: "Étirement des pectoraux", sets: 1, reps: "1", rest: 30),
+            Line(name: "Étirements poignets", sets: 1, reps: "1", rest: 30),
+            Line(name: "Squat profond maintenu", sets: 1, reps: "1", rest: 30),
+            Line(name: "Étirement des fléchisseurs de la hanche", sets: 1, reps: "1", rest: 30),
+            Line(name: "Dorsiflexion de la cheville", sets: 1, reps: "1", rest: 30),
+        ]
     }
 }

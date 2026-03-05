@@ -2,19 +2,21 @@
 //  EventKitManager.swift
 //  Muscu
 //
-//  Singleton manager for EventKit integration (calendar sync)
+//  Rôle : Singleton d'accès EventKit (autorisation, création d'événements calendrier pour planifier une séance).
+//  Utilisé par : WorkoutManager (scheduleInCalendar), WorkoutView (options séance).
 //
 
 import Foundation
-import Combine
 import EventKit
+import Observation
 
 @MainActor
-final class EventKitManager: ObservableObject {
+@Observable
+final class EventKitManager {
     static let shared = EventKitManager()
     private let eventStore = EKEventStore()
 
-    @Published var isAuthorized: Bool = false
+    var isAuthorized: Bool = false
 
     private init() {}
 

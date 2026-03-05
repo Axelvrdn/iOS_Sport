@@ -2,7 +2,8 @@
 //  ProgramManager.swift
 //  Muscu
 //
-//  Validation du programme (règles, avertissements).
+//  Rôle : Validateur de planning (ScheduleWarning) pour TrainingProgram ; détecte ex. deux jours lower consécutifs.
+//  Utilisé par : ProgramEditorView (ScheduleWarningsBanner).
 //
 
 import Foundation

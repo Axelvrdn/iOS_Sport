@@ -2,48 +2,157 @@
 //  WorkoutView.swift
 //  Muscu
 //
-//  Dashboard Workout au design moderne (cartes, jauge circulaire, streak, barre flottante).
+//  Rôle : Dashboard Workout (évaluation du jour, streak, Mes programmes, Programme actif) ; design Elite Athlete.
+//  Utilisé par : ContentView (onglet 0).
 //
 
 import SwiftUI
 import SwiftData
 import EventKit
 
-// MARK: - Dashboard Card (Liquid Glass : verre dépoli, flottant)
+// MARK: - Elite Design System (adaptatif Light / Dark)
 
-struct DashboardCardStyle: ViewModifier {
-    var cornerRadius: CGFloat = 18
+private enum EliteDesign {
+    static let accentVolt = Color(hex: "D0FD3E")
+    /// Même Vert Volt électrique qu'en dark (Premium Apple).
+    static let accentVoltLight = Color(hex: "D0FD3E")
+    static let cornerRadiusLarge: CGFloat = 24
+    static let cornerRadiusSmall: CGFloat = 16
+    static let cardBorderWidth: CGFloat = 0.5
+    static let horizontalPadding: CGFloat = 20
+
+    /// Fond de page : système (Light) / Deep Charcoal (Dark).
+    static func background(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(hex: "0F1115") : Color(.systemGroupedBackground)
+    }
+
+    /// Fond des cartes : gris très léger (Light) / Charcoal (Dark).
+    static func cardBackground(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(hex: "1C1F26") : Color(.secondarySystemGroupedBackground)
+    }
+
+    /// Bordure des cartes : gris discret (Light) / blanc 10% (Dark).
+    static func cardBorder(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color.white.opacity(0.1) : Color.gray.opacity(0.2)
+    }
+
+    /// Couleur accent (boutons, indicateurs) : Volt clair (Dark) / Herbe (Light).
+    static func accent(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? accentVolt : accentVoltLight
+    }
+
+    /// Texte sur bouton accent : noir en light (lisibilité max), charcoal en dark.
+    static func textOnAccent(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(hex: "0F1115") : .black
+    }
+
+    static var sectionTitleFont: Font {
+        .system(size: 17, weight: .bold, design: .rounded)
+    }
+    static var sectionTitleFontCondensed: Font {
+        .system(size: 15, weight: .black, design: .rounded)
+    }
+    static var numberFont: Font {
+        .system(.body, design: .monospaced)
+            .weight(.semibold)
+    }
+    static var impactStreakFont: Font {
+        .system(size: 28, weight: .heavy, design: .rounded)
+    }
+}
+
+private extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3:
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6:
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
+    }
+}
+
+// MARK: - Carte Elite (fond et bordure adaptatifs Light/Dark)
+
+private struct EliteCardStyle: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    var cornerRadius: CGFloat = EliteDesign.cornerRadiusLarge
+    var useMaterial: Bool = false
 
     func body(content: Content) -> some View {
         content
             .padding()
-            .liquidGlassCard(cornerRadius: cornerRadius)
+            .background {
+                Group {
+                    if useMaterial {
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .fill(.ultraThinMaterial)
+                    } else {
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .fill(EliteDesign.cardBackground(for: colorScheme))
+                    }
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(EliteDesign.cardBorder(for: colorScheme), lineWidth: EliteDesign.cardBorderWidth)
+            )
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.12 : 0.06), radius: 8, x: 0, y: 2)
     }
 }
 
-extension View {
-    func dashboardCard(cornerRadius: CGFloat = 18) -> some View {
-        modifier(DashboardCardStyle(cornerRadius: cornerRadius))
+private extension View {
+    func eliteCard(cornerRadius: CGFloat = EliteDesign.cornerRadiusLarge, material: Bool = false) -> some View {
+        modifier(EliteCardStyle(cornerRadius: cornerRadius, useMaterial: material))
     }
 }
 
-// MARK: - Workout View (Dashboard principal)
+// MARK: - Bouton scale au tap (0.98)
+
+private struct EliteScaleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Navigation programme (ID stable)
+
+private struct ProgramNavItem: Identifiable, Equatable, Hashable {
+    let id: PersistentIdentifier
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+// MARK: - Workout View (Dashboard Elite)
 
 struct WorkoutView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
+    @Environment(\.textOnAccentColor) private var textOnAccentColor
     @Query private var profiles: [UserProfile]
-    @Query(sort: \WorkoutProgram.name) private var legacyWorkoutPrograms: [WorkoutProgram]
-    /// Programmes (nouveau modèle) — source de vérité pour "Mes programmes" et "Programme actif".
     @Query(sort: \TrainingProgram.name) private var programs: [TrainingProgram]
     @Query(sort: \DailyLog.date, order: .reverse) private var logs: [DailyLog]
     @Query(sort: \WorkoutHistorySession.date, order: .reverse) private var sessions: [WorkoutHistorySession]
 
-    @StateObject private var healthKit = HealthKitManager.shared
-    @StateObject private var workoutManager = WorkoutManager.shared
-    @State private var selectedProgram: WorkoutProgram?
-    /// Programme actif : auto-sélectionné au premier apparu si la liste n'est pas vide.
+    @State private var workoutManager = WorkoutManager.shared
     @State private var activeProgram: TrainingProgram?
-
     @State private var showChat: Bool = false
     @State private var showDebugDatabase: Bool = false
     @State private var showActiveSessionSheet: Bool = false
@@ -51,42 +160,37 @@ struct WorkoutView: View {
     @State private var scheduleDate: Date = Date()
     @State private var launchRunner: Bool = false
     @State private var showingCreationSheet: Bool = false
-    @State private var programToEdit: TrainingProgram?
+    @State private var programToEdit: ProgramNavItem?
     @State private var pendingActivateProgram: TrainingProgram?
 
     private var userProfile: UserProfile? { profiles.first }
 
-    private var evaluationScore: Int {
-        let stepsScore = min(Double(healthKit.todaySteps) / 10_000.0, 1.0) * 30.0
-        let sleepScore = min(healthKit.lastNightSleepHours / 8.0, 1.0) * 25.0
-        let log = logs.first
-        let soreness = 10 - Double(log?.sorenessLevel ?? 5)
-        let mood = Double(log?.mood ?? 5)
-        let recoveryScore = max(min((soreness + mood) / 20.0, 1.0), 0) * 20.0
-        let recentSessions = sessions.prefix(7)
-        let adherenceScore: Double
-        if recentSessions.isEmpty {
-            adherenceScore = 0.5 * 25.0
-        } else {
-            let avgCompletion = Double(recentSessions.map { $0.completionPercentage }.reduce(0, +)) / Double(recentSessions.count)
-            let avgRest = Double(recentSessions.map { $0.averageRestTimeSeconds }.reduce(0, +)) / Double(recentSessions.count)
-            let restScore = (avgRest >= 60 && avgRest <= 90) ? 1.0 : max(0.5, 1.0 - abs(avgRest - 75) / 75.0)
-            adherenceScore = (avgCompletion / 100.0 * 0.7 + restScore * 0.3) * 25.0
-        }
-        return Int(stepsScore + sleepScore + recoveryScore + adherenceScore)
+    private var lastSessionSummary: String? {
+        guard let session = sessions.first else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return "\(session.programName.isEmpty ? "Séance" : session.programName) • \(formatter.string(from: session.date))"
     }
 
-    /// Programmes affichés dans la section "Mes programmes".
-    private var displayedPrograms: [TrainingProgram] {
-        programs
-    }
+    private var displayedPrograms: [TrainingProgram] { programs }
 
-    /// Programme actif affiché : source de vérité = UserProfile (persistance), puis state local, puis premier de la liste.
     private var displayedActiveProgram: TrainingProgram? {
         userProfile?.activeTrainingProgram ?? activeProgram ?? programs.first
     }
 
-    /// Active un programme et persiste dans SwiftData (UserProfile.activeTrainingProgram).
+    /// Log du jour pour l’évaluation (Pas, Sommeil).
+    private var todayLog: DailyLog? {
+        let calendar = Calendar.current
+        return logs.first { calendar.isDateInToday($0.date) }
+    }
+
+    /// True si une séance du jour a été complétée (flamme en couleur).
+    private var isTodayWorkoutCompleted: Bool {
+        let calendar = Calendar.current
+        return sessions.contains { calendar.isDateInToday($0.date) && $0.isCompleted }
+    }
+
     private func activateProgram(_ program: TrainingProgram) {
         guard let profile = userProfile else {
             activeProgram = program
@@ -94,55 +198,49 @@ struct WorkoutView: View {
         }
         profile.activeTrainingProgram = program
         activeProgram = program
-        do {
-            try context.save()
-        } catch {
-            print("[WorkoutView] Erreur save activateProgram: \(error)")
-        }
+        try? context.save()
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    evaluationCard
+                VStack(alignment: .leading, spacing: 24) {
+                    dayEvaluationHeader
                     NavigationLink {
                         StreakDetailView()
                     } label: {
-                        StreakCardView(
+                        EliteStreakCardView(
                             currentStreak: workoutManager.currentStreak,
                             weeklyCurrent: workoutManager.weeklyWorkoutDays.current,
-                            weeklyGoal: workoutManager.weeklyWorkoutDays.goal
+                            weeklyGoal: workoutManager.weeklyWorkoutDays.goal,
+                            isTodayWorkoutCompleted: isTodayWorkoutCompleted
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EliteScaleButtonStyle())
                     recommendedProgramsSection
                     activeProgramSection
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
+                .padding(.horizontal, EliteDesign.horizontalPadding)
+                .padding(.top, 16)
                 .padding(.bottom, 100)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(EliteDesign.background(for: colorScheme))
+            .scrollIndicators(.hidden)
             .navigationBarTitleDisplayMode(.large)
             .navigationTitle("Workout")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 16) {
-                        Button {
-                            showDebugDatabase = true
-                        } label: {
+                        Button { showDebugDatabase = true } label: {
                             Image(systemName: "ladybug.fill")
                                 .font(.body)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.secondary)
                         }
                         .accessibilityLabel("Debug base de données")
-                        Button {
-                            showChat = true
-                        } label: {
+                        Button { showChat = true } label: {
                             Image(systemName: "bubble.left.and.bubble.right.fill")
                                 .font(.body)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(accentColor)
                         }
                         .accessibilityLabel("Parler au coach IA")
                     }
@@ -156,33 +254,31 @@ struct WorkoutView: View {
                     dayIndex: workoutManager.suggestedDayIndex
                 )
             }
-            .navigationDestination(item: $programToEdit) { program in
-                ProgramEditorView(program: program)
-                    .onDisappear { programToEdit = nil }
+            .navigationDestination(item: $programToEdit) { item in
+                if let program = context.model(for: item.id) as? TrainingProgram {
+                    ProgramEditorView(program: program)
+                        .id(item.id)
+                        .onDisappear { programToEdit = nil }
+                } else {
+                    ContentUnavailableView("Programme introuvable", systemImage: "doc.badge.gearshape")
+                        .onDisappear { programToEdit = nil }
+                }
             }
-            .sheet(isPresented: $showDebugDatabase) {
-                DebugDatabaseView()
+            .navigationDestination(for: PersistentIdentifier.self) { dayID in
+                DayEditorView(dayID: dayID, onDismiss: nil)
+                    .id(dayID)
             }
-            .sheet(isPresented: $showChat) {
-                ChatView(strictnessLevel: userProfile?.strictnessLevel ?? 0.5)
-            }
+            .sheet(isPresented: $showDebugDatabase) { DebugDatabaseView() }
+            .sheet(isPresented: $showChat) { AICoachView(strictnessLevel: userProfile?.strictnessLevel ?? 0.5, activeProgram: activeProgram) }
             .sheet(isPresented: $showingCreationSheet) {
                 NewProgramSheet { name, category in
                     let newProgram = DataController.createNewProgram(context: context, name: name, category: category)
-                    programToEdit = newProgram
+                    programToEdit = ProgramNavItem(id: newProgram.persistentModelID)
                 }
             }
-            .sheet(isPresented: $showActiveSessionSheet) {
-                activeSessionOptionsSheet
-            }
-            .task {
-                await healthKit.requestAuthorization()
-                await healthKit.fetchTodaySteps()
-                await healthKit.fetchLastNightSleep()
-                workoutManager.refreshSuggestion(context: context)
-            }
+            .sheet(isPresented: $showActiveSessionSheet) { activeSessionOptionsSheet }
+            .task { workoutManager.refreshSuggestion(context: context) }
             .onAppear {
-                // Source de vérité : toujours réhydrater depuis le profil (persistance après changement d’onglet)
                 if let profileProgram = userProfile?.activeTrainingProgram {
                     activeProgram = profileProgram
                 } else if activeProgram == nil, let firstProgram = programs.first {
@@ -202,106 +298,86 @@ struct WorkoutView: View {
         }
     }
 
-    // MARK: - Evaluation Card (jauge circulaire)
+    // MARK: - Header Évaluation du jour (jauge semi-cercle, Pas, Sommeil)
 
-    private var evaluationCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Évaluation du jour")
-                .font(.headline.bold())
-                .foregroundStyle(.primary)
+    private var dayEvaluationHeader: some View {
+        let steps = todayLog?.steps ?? 0
+        let sleepQuality = todayLog?.sleepQuality ?? 5
+        let dayScore = min(10, (min(steps / 1000, 10) + sleepQuality) / 2)
+        let progress = CGFloat(dayScore) / 10.0
 
-            HStack(spacing: 24) {
-                ZStack {
-                    Circle()
-                        .stroke(Color(.systemGray5), lineWidth: 10)
-                        .frame(width: 100, height: 100)
-
-                    Circle()
-                        .trim(from: 0, to: CGFloat(evaluationScore) / 100.0)
-                        .stroke(
-                            AngularGradient(
-                                gradient: Gradient(colors: [
-                                    evaluationScore >= 70 ? Color.green : (evaluationScore >= 40 ? Color.orange : Color.red),
-                                    evaluationScore >= 70 ? Color.green.opacity(0.7) : (evaluationScore >= 40 ? Color.orange.opacity(0.7) : Color.red.opacity(0.7))
-                                ]),
-                                center: .center
-                            ),
-                            style: StrokeStyle(lineWidth: 10, lineCap: .round)
-                        )
-                        .frame(width: 100, height: 100)
-                        .rotationEffect(.degrees(-90))
-
-                    VStack(spacing: 0) {
-                        Text("\(evaluationScore)")
-                            .font(.system(size: 32, weight: .bold, design: .rounded))
-                            .foregroundStyle(evaluationScore >= 70 ? .green : (evaluationScore >= 40 ? .orange : .red))
-                        Text("/ 100")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "figure.walk")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("Pas aujourd'hui : \(healthKit.todaySteps)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack(spacing: 8) {
-                        Image(systemName: "bed.double.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("Sommeil : \(healthKit.lastNightSleepHours, specifier: "%.1f") h")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 0)
+        return HStack(spacing: 20) {
+            ZStack {
+                SemiCircleGauge(progress: progress)
             }
+            .frame(width: 88, height: 52)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 16) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "figure.walk")
+                            .font(.system(size: 14, weight: .ultraLight))
+                            .foregroundStyle(Color.secondary)
+                        Text("\(steps)")
+                            .font(EliteDesign.numberFont)
+                            .foregroundStyle(Color.primary)
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: "moon.zzz")
+                            .font(.system(size: 14, weight: .light))
+                            .foregroundStyle(Color.secondary)
+                        Text("\(sleepQuality)/10")
+                            .font(EliteDesign.numberFont)
+                            .foregroundStyle(Color.primary)
+                    }
+                }
+                if let summary = lastSessionSummary {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text("Lance une séance pour commencer.")
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+            Spacer(minLength: 0)
         }
-        .dashboardCard()
+        .eliteCard(cornerRadius: EliteDesign.cornerRadiusLarge, material: true)
     }
 
-    // MARK: - Mes programmes (TrainingProgram)
+    // MARK: - Mes programmes
 
     private var recommendedProgramsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Mes programmes")
-                .font(.headline.bold())
+                .font(EliteDesign.sectionTitleFont)
+                .foregroundStyle(Color.primary)
 
             HStack(spacing: 12) {
-                Button {
-                    showingCreationSheet = true
-                } label: {
+                Button { showingCreationSheet = true } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "plus")
-                            .font(.title3.bold())
-                            .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
-                            .background(Color.accentColor)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        Text("Ajouter un programme")
-                            .font(.subheadline.bold())
-                            .foregroundStyle(.primary)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(textOnAccentColor)
+                        Text("Ajouter")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(textOnAccentColor)
                     }
                     .padding(.vertical, 10)
-                    .padding(.leading, 12)
-                    .padding(.trailing, 16)
-                    .background(Color(.systemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
+                    .padding(.horizontal, 14)
+                    .background(accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EliteScaleButtonStyle())
 
                 if !displayedPrograms.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
                             ForEach(displayedPrograms) { program in
                                 let isActive = program.persistentModelID == displayedActiveProgram?.persistentModelID
-                                programCard(program: program, isActive: isActive)
+                                eliteProgramCard(program: program, isActive: isActive)
                             }
                         }
                     }
@@ -310,133 +386,199 @@ struct WorkoutView: View {
         }
     }
 
-    /// Carte programme : simple tap = activer, double tap = ouvrir l’éditeur.
-    private func programCard(program: TrainingProgram, isActive: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(program.name)
-                    .font(.subheadline.bold())
-                    .lineLimit(1)
-                if isActive {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(.blue)
+    private func eliteProgramCard(program: TrainingProgram, isActive: Bool) -> some View {
+        EliteProgramCardContent(
+            program: program,
+            isActive: isActive,
+            categoryColor: categoryColor(for: program.sportCategories.first, colorScheme: colorScheme),
+            onSingleTap: {
+                pendingActivateProgram = program
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    if pendingActivateProgram?.persistentModelID == program.persistentModelID {
+                        activateProgram(program)
+                        pendingActivateProgram = nil
+                    }
                 }
+            },
+            onDoubleTap: {
+                pendingActivateProgram = nil
+                programToEdit = ProgramNavItem(id: program.persistentModelID)
             }
-            Text(program.programDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .frame(width: 140, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isActive ? Color.blue : Color.clear, lineWidth: 2)
         )
-        .onTapGesture(count: 2) {
-            pendingActivateProgram = nil
-            programToEdit = program
-        }
-        .onTapGesture(count: 1) {
-            pendingActivateProgram = program
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                if pendingActivateProgram?.persistentModelID == program.persistentModelID {
-                    activateProgram(program)
-                    pendingActivateProgram = nil
-                }
-            }
+    }
+
+    private func categoryColor(for category: SportCategory?, colorScheme: ColorScheme) -> Color? {
+        guard let category = category else { return nil }
+        switch category {
+        case .bodybuilding: return Color.orange
+        case .volley: return Color.blue
+        case .basket: return Color.red
+        case .running: return Color.green
+        case .boxing: return Color.purple
+        case .general: return accentColor
         }
     }
 
-    // MARK: - Programme actif / Empty state
+    // MARK: - Programme actif (Carte Hero)
 
     private var activeProgramSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Programme actif")
-                .font(.headline.bold())
+                .font(EliteDesign.sectionTitleFont)
+                .foregroundStyle(Color.primary)
 
             if let program = workoutManager.suggestedProgram, !workoutManager.suggestedExercises.isEmpty {
-                let dayIndex = workoutManager.suggestedDayIndex
-                let first = workoutManager.suggestedExercises.first
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(program.name)
-                        .font(.title3.bold())
-                    Text(first?.dayName ?? "Jour \(dayIndex)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Divider()
-                    Text("Prochaine séance suggérée")
-                        .font(.subheadline.bold())
-                    Text("Jour \(dayIndex) • \(first?.dayFocus ?? "")")
-                        .font(.footnote)
-                    Text("\(workoutManager.suggestedExercises.count) exercices")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 12) {
-                        Button("Skip") { workoutManager.markSkipped(context: context) }
-                            .buttonStyle(.bordered)
-                        Button("Options") { showActiveSessionSheet = true }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .padding(.top, 4)
-                }
-                .padding()
-                .dashboardCard()
-                .sheet(isPresented: $showActiveSessionSheet) {
-                    activeSessionOptionsSheet
-                }
+                heroSuggestedSessionCard(program: program)
             } else if let program = displayedActiveProgram {
                 NavigationLink {
                     PlanningView()
                 } label: {
-                    HStack(spacing: 16) {
-                        Image(systemName: "doc.text.fill")
-                            .font(.system(size: 44))
-                            .foregroundStyle(Color.accentColor)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(program.name)
-                                .font(.subheadline.bold())
-                            Text(program.programDescription)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.bold())
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding()
-                    .dashboardCard()
+                    heroActiveProgramCard(program: program)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EliteScaleButtonStyle())
             } else {
-                activeProgramEmptyCard
+                heroEmptyCard
             }
         }
     }
 
-    private var activeProgramEmptyCard: some View {
+    private func heroSuggestedSessionCard(program: WorkoutProgram) -> some View {
+        let dayIndex = workoutManager.suggestedDayIndex
+        let first = workoutManager.suggestedExercises.first
+        let cardBg = EliteDesign.cardBackground(for: colorScheme)
+        return ZStack(alignment: .bottomLeading) {
+            LinearGradient(
+                colors: [cardBg, cardBg.opacity(0.95)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: "figure.strengthtraining.traditional")
+                .font(.system(size: 120, weight: .ultraLight))
+                .foregroundStyle(Color.primary.opacity(0.05))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .padding(.trailing, 20)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text(program.name)
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                Text(first?.dayName ?? "Jour \(dayIndex)")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.secondary)
+                Text("\(workoutManager.suggestedExercises.count) exercices • \(first?.dayFocus ?? "")")
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+                HStack(spacing: 12) {
+                    Button("Skip") { workoutManager.markSkipped(context: context) }
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.secondary)
+                    Button("Options") { showActiveSessionSheet = true }
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(textOnAccentColor)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.primary.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .padding(.top, 4)
+
+                Button {
+                    showActiveSessionSheet = false
+                    launchRunner = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("START SESSION")
+                            .font(.system(size: 15, weight: .black, design: .rounded))
+                    }
+                    .foregroundStyle(textOnAccentColor)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
+                }
+                .buttonStyle(EliteScaleButtonStyle())
+                .padding(.top, 4)
+            }
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusLarge))
+        .overlay(
+            RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusLarge)
+                .strokeBorder(EliteDesign.cardBorder(for: colorScheme), lineWidth: EliteDesign.cardBorderWidth)
+        )
+        .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 4)
+        .glow(color: colorScheme == .light ? accentColor : .clear, opacity: 0.3, radius: 20, y: 12)
+        .sheet(isPresented: $showActiveSessionSheet) { activeSessionOptionsSheet }
+    }
+
+    private func heroActiveProgramCard(program: TrainingProgram) -> some View {
+        let cardBg = EliteDesign.cardBackground(for: colorScheme)
+        return ZStack(alignment: .bottomTrailing) {
+            LinearGradient(
+                colors: [cardBg, cardBg.opacity(0.98)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: "doc.text.fill")
+                .font(.system(size: 80, weight: .ultraLight))
+                .foregroundStyle(Color.primary.opacity(0.05))
+                .padding(24)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(program.name)
+                    .font(.system(size: 20, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                if !program.programDescription.isEmpty {
+                    Text(program.programDescription)
+                        .font(.footnote)
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(2)
+                }
+                HStack {
+                    Text("Voir le planning")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(accentColor)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(accentColor)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusLarge))
+        .overlay(
+            RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusLarge)
+                .strokeBorder(EliteDesign.cardBorder(for: colorScheme), lineWidth: EliteDesign.cardBorderWidth)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+    }
+
+    private var heroEmptyCard: some View {
         HStack(spacing: 16) {
             Image(systemName: "figure.run")
-                .font(.system(size: 44))
-                .foregroundStyle(Color(.systemGray3))
-
+                .font(.system(size: 40, weight: .ultraLight))
+                .foregroundStyle(Color.secondary.opacity(0.6))
             VStack(alignment: .leading, spacing: 4) {
                 Text("Aucune séance suggérée")
-                    .font(.subheadline.bold())
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.primary)
                 Text("Termine ta première séance pour démarrer la rotation.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary)
             }
             Spacer(minLength: 0)
         }
-        .padding()
-        .dashboardCard()
+        .padding(20)
+        .background(EliteDesign.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusLarge))
+        .overlay(
+            RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusLarge)
+                .strokeBorder(EliteDesign.cardBorder(for: colorScheme), lineWidth: EliteDesign.cardBorderWidth)
+        )
     }
 
     private var activeSessionOptionsSheet: some View {
@@ -446,18 +588,31 @@ struct WorkoutView: View {
                     scheduleDate = Date()
                     showScheduleSheet = true
                 }
-                .buttonStyle(.borderedProminent)
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(textOnAccentColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(accentColor)
+                .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
 
                 Button("Lancer la séance") {
                     showActiveSessionSheet = false
                     launchRunner = true
                 }
-                .buttonStyle(.borderedProminent)
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(colorScheme == .light ? .black : accentColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .overlay(
+                    RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall)
+                        .strokeBorder(accentColor, lineWidth: 1.5)
+                )
 
                 Button("Fermer") { showActiveSessionSheet = false }
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.secondary)
             }
-            .padding()
+            .padding(EliteDesign.horizontalPadding)
             .navigationTitle("Séance")
             .sheet(isPresented: $showScheduleSheet) {
                 NavigationStack {
@@ -472,8 +627,12 @@ struct WorkoutView: View {
                                 showActiveSessionSheet = false
                             }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(textOnAccentColor)
+                        .frame(maxWidth: .infinity)
                         .padding()
+                        .background(accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
                     }
                     .navigationTitle("Planifier")
                 }
@@ -482,12 +641,96 @@ struct WorkoutView: View {
     }
 }
 
-// MARK: - Streak Card (Flame)
+// MARK: - Carte programme avec scale au tap
 
-struct StreakCardView: View {
+private struct EliteProgramCardContent: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
+    let program: TrainingProgram
+    let isActive: Bool
+    let categoryColor: Color?
+    let onSingleTap: () -> Void
+    let onDoubleTap: () -> Void
+    @State private var isPressed = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let color = categoryColor {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+            }
+            Text(program.name)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: 140, alignment: .leading)
+        .background(EliteDesign.cardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
+        .overlay(
+            RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall)
+                .strokeBorder(isActive ? accentColor : EliteDesign.cardBorder(for: colorScheme), lineWidth: isActive ? 1.5 : EliteDesign.cardBorderWidth)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 2)
+        .scaleEffect(isPressed ? 0.98 : 1.0)
+        .animation(.easeInOut(duration: 0.15), value: isPressed)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onDoubleTap)
+        .onTapGesture(count: 1, perform: onSingleTap)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in if !isPressed { isPressed = true } }
+                .onEnded { _ in isPressed = false }
+        )
+    }
+}
+
+// MARK: - Jauge semi-circulaire (Glow / progression)
+
+private struct SemiCircleGauge: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
+    let progress: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Circle()
+                .trim(from: 0.25, to: 0.75)
+                .stroke(
+                    Color.primary.opacity(0.12),
+                    style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                )
+                .rotationEffect(.degrees(90))
+            Circle()
+                .trim(from: 0.25, to: 0.25 + 0.5 * progress)
+                .stroke(
+                    LinearGradient(
+                        colors: [accentColor.opacity(0.8), accentColor],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                )
+                .rotationEffect(.degrees(90))
+                .glow(color: accentColor, opacity: 0.5, radius: 4)
+        }
+    }
+}
+
+// MARK: - Streak Elite (compact, flamme couleur ou grisée selon entraînement du jour)
+
+struct EliteStreakCardView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
     let currentStreak: Int
     let weeklyCurrent: Int
     let weeklyGoal: Int
+    /// Si false, la flamme est grisée et en opacité réduite.
+    var isTodayWorkoutCompleted: Bool = false
 
     private var progress: CGFloat {
         guard weeklyGoal > 0 else { return 0 }
@@ -495,53 +738,58 @@ struct StreakCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 16) {
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 44))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.orange, .red],
+        HStack(spacing: 16) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(
+                    isTodayWorkoutCompleted
+                        ? LinearGradient(
+                            colors: [.yellow, accentColor],
                             startPoint: .bottom,
                             endPoint: .top
                         )
-                    )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(currentStreak) Jours")
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
-                    Text("Continue ta série !")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            HStack(spacing: 10) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color(.systemGray5))
-                            .frame(height: 6)
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(
-                                LinearGradient(
-                                    colors: [.orange, .red],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: max(0, geo.size.width * progress), height: 6)
-                    }
-                }
-                .frame(height: 6)
-                Text("\(weeklyCurrent)/\(weeklyGoal)")
+                        : LinearGradient(colors: [Color.gray, Color.gray], startPoint: .top, endPoint: .bottom)
+                )
+                .grayscale(isTodayWorkoutCompleted ? 0 : 1.0)
+                .opacity(isTodayWorkoutCompleted ? 1.0 : 0.4)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(currentStreak == 0 ? "0 jour" : "\(currentStreak) JOURS")
+                    .font(currentStreak == 0 ? .subheadline.weight(.medium) : EliteDesign.impactStreakFont)
+                    .foregroundStyle(currentStreak == 0 ? Color.secondary : Color.primary)
+                Text(currentStreak == 0 ? "Lance une séance pour démarrer" : "Continue ta série")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary)
             }
+            Spacer(minLength: 0)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.primary.opacity(0.1))
+                        .frame(height: 5)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(
+                            LinearGradient(
+                                colors: [.yellow.opacity(0.9), accentColor],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(0, geo.size.width * progress), height: 5)
+                }
+            }
+            .frame(width: 56, height: 5)
+            Text("\(weeklyCurrent)/\(weeklyGoal)")
+                .font(EliteDesign.numberFont)
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
         }
-        .padding()
-        .dashboardCard()
+        .padding(16)
+        .eliteCard(cornerRadius: EliteDesign.cornerRadiusLarge)
+        .glow(color: colorScheme == .light ? accentColor : .clear, opacity: 0.3, radius: 20, y: 12)
     }
+}
+
+#Preview("WorkoutView") {
+    WorkoutView()
+        .modelContainer(for: [UserProfile.self, TrainingProgram.self, DailyLog.self, WorkoutHistorySession.self], inMemory: true)
 }

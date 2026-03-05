@@ -2,7 +2,8 @@
 //  LaunchScreenView.swift
 //  Muscu
 //
-//  Écran de lancement : logo Diamond sur fond noir, transition vers l'app.
+//  Rôle : Écran de lancement (logo Diamond sur fond noir) affiché avant le contenu principal.
+//  Utilisé par : MuscuApp (RootView).
 //
 
 import SwiftUI

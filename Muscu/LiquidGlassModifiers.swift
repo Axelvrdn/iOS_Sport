@@ -2,7 +2,8 @@
 //  LiquidGlassModifiers.swift
 //  Muscu
 //
-//  Modificateurs "Liquid Glass" : verre dépoli, translucide, reflets.
+//  Rôle : Modificateurs visuels Liquid Glass (barre d'onglets, cartes verre dépoli).
+//  Utilisé par : ContentView (CustomFloatingTabBar), PlanningView, WorkoutView (dashboardCard).
 //
 
 import SwiftUI
@@ -85,5 +86,10 @@ struct LiquidGlassCardBackground: ViewModifier {
 extension View {
     func liquidGlassCard(cornerRadius: CGFloat = 18) -> some View {
         modifier(LiquidGlassCardBackground(cornerRadius: cornerRadius))
+    }
+
+    /// Alias pour les vues qui utilisaient le style carte dashboard (ex. StreakDetailView, ProfileView).
+    func dashboardCard(cornerRadius: CGFloat = 18) -> some View {
+        liquidGlassCard(cornerRadius: cornerRadius)
     }
 }

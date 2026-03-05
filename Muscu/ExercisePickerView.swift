@@ -2,7 +2,8 @@
 //  ExercisePickerView.swift
 //  Muscu
 //
-//  Liste des ExerciseMaster avec visuel ; sélection ouvre la configuration.
+//  Rôle : Liste des ExerciseMaster avec visuel ; sélection renvoie le master puis ouvre la configuration (ExerciseConfigSheet).
+//  Utilisé par : DayEditorView, SessionExerciseEditorView (changer l'exercice).
 //
 
 import SwiftUI

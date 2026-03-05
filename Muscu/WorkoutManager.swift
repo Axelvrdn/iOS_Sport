@@ -2,26 +2,28 @@
 //  WorkoutManager.swift
 //  Muscu
 //
-//  Gère la suggestion de prochaine séance et les actions Skip / Planifier.
+//  Rôle : Suggestion de prochaine séance (legacy WorkoutProgram/Exercise), streak, Skip / Planifier ; utilisé par SessionRunnerView.
+//  Utilisé par : WorkoutView (suggestion séance, streak), SessionRunnerView (program/exercises).
 //
 
 import Foundation
 import SwiftData
-import Combine
+import Observation
 
 @MainActor
-final class WorkoutManager: ObservableObject {
+@Observable
+final class WorkoutManager {
     static let shared = WorkoutManager()
 
-    @Published var suggestedProgram: WorkoutProgram?
-    @Published var suggestedPhaseIndex: Int = 1
-    @Published var suggestedDayIndex: Int = 1
-    @Published var suggestedExercises: [Exercise] = []
+    var suggestedProgram: WorkoutProgram?
+    var suggestedPhaseIndex: Int = 1
+    var suggestedDayIndex: Int = 1
+    var suggestedExercises: [Exercise] = []
 
     /// Série de jours consécutifs avec au moins une séance complétée.
-    @Published var currentStreak: Int = 0
+    var currentStreak: Int = 0
     /// Cette semaine : (jours avec séance, objectif 7).
-    @Published var weeklyWorkoutDays: (current: Int, goal: Int) = (0, 7)
+    var weeklyWorkoutDays: (current: Int, goal: Int) = (0, 7)
 
     private init() {}
 

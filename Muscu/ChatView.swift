@@ -2,7 +2,8 @@
 //  ChatView.swift
 //  Muscu
 //
-//  Simple chat interface with the AI Coach.
+//  Rôle : Interface chat avec le coach IA (messages, champ de saisie, bulles).
+//  Utilisé par : WorkoutView (sheet via bouton bulles).
 //
 
 import SwiftUI

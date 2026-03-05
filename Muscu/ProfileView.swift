@@ -2,7 +2,8 @@
 //  ProfileView.swift
 //  Muscu
 //
-//  Tableau de bord personnel : cartes modernes (liquid glass), synthèse et sections.
+//  Rôle : Tableau de bord profil utilisateur (objectifs, style, disponibilités, liquid glass).
+//  Utilisé par : SettingsView (NavigationLink Profil).
 //
 
 import SwiftUI
@@ -71,6 +72,15 @@ enum TrainingStyleKind: String, CaseIterable, Identifiable {
         case .specificSport: return "sportscourt.fill"
         }
     }
+
+    func toTrainingStyle(specificSport: SpecificSport = .volley) -> TrainingStyle {
+        switch self {
+        case .bodybuilding: return .bodybuilding
+        case .marathon: return .marathon
+        case .hybrid: return .hybrid
+        case .specificSport: return .specificSport(specificSport)
+        }
+    }
 }
 
 // MARK: - Disponibilité hebdo (7 jours) — lié à UserProfile.availableDays
@@ -94,7 +104,7 @@ struct DoubleTapEditableIntField: View {
             if isEditing {
                 TextField("", text: $textValue)
                     .keyboardType(.numberPad)
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .font(.system(size: 26, weight: .bold, design: .monospaced))
                     .multilineTextAlignment(.center)
                     .focused($isFocused)
                     .onSubmit { commitInt() }
@@ -104,7 +114,7 @@ struct DoubleTapEditableIntField: View {
             } else {
                 HStack(spacing: 4) {
                     Text("\(value)")
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .font(.system(size: 26, weight: .bold, design: .monospaced))
                     Image(systemName: "pencil.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.secondary.opacity(0.8))
@@ -148,7 +158,7 @@ struct DoubleTapEditableDoubleField: View {
             if isEditing {
                 TextField("", text: $textValue)
                     .keyboardType(.decimalPad)
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .font(.system(size: 26, weight: .bold, design: .monospaced))
                     .multilineTextAlignment(.center)
                     .focused($isFocused)
                     .onSubmit { commitDouble() }
@@ -158,7 +168,7 @@ struct DoubleTapEditableDoubleField: View {
             } else {
                 HStack(spacing: 4) {
                     Text(step >= 1 ? "\(Int(value))" : String(format: "%.1f", value))
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .font(.system(size: 26, weight: .bold, design: .monospaced))
                     Image(systemName: "pencil.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.secondary.opacity(0.8))
@@ -187,14 +197,247 @@ struct DoubleTapEditableDoubleField: View {
     }
 }
 
-// MARK: - Profile View (Dashboard par cartes)
+// MARK: - Couleurs Elite Profile (fond unifié, cartes)
+
+private let EliteProfileBgDark = Color(red: 15/255, green: 17/255, blue: 21/255)
+private let EliteProfileCardDark = Color(red: 28/255, green: 31/255, blue: 38/255)
+
+// MARK: - Badges Elite (Honneurs)
+
+private enum EliteProfileBadge: String, CaseIterable {
+    case firstSession = "figure.strengthtraining.traditional"
+    case consistency = "flame"
+    case ecouteDuCorps = "shield.fill"
+    case volume = "dumbbell.fill"
+
+    var iconName: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .firstSession: return "PREMIÈRE SÉANCE"
+        case .consistency: return "MAÎTRE DE LA RÉGULARITÉ"
+        case .ecouteDuCorps: return "ÉCOUTE DU CORPS"
+        case .volume: return "MAÎTRE DU VOLUME"
+        }
+    }
+
+    var criteriaDescription: String {
+        switch self {
+        case .firstSession: return "Attribué pour avoir complété ta première séance d'entraînement. Le début d'une aventure."
+        case .consistency: return "Attribué pour avoir enchaîné au moins 3 jours d'entraînement sur les 7 derniers jours. La régularité prime."
+        case .ecouteDuCorps: return "Attribué pour avoir renseigné tes blessures ou ta sensibilité dans le profil santé. Valoriser la prévention et l'écoute de son corps."
+        case .volume: return "Attribué pour avoir complété 10 séances. La constance récompensée."
+        }
+    }
+
+    func isAcquired(profile: UserProfile?, historySessions: [WorkoutHistorySession], injuryHistory: String, injurySensitivity: InjurySensitivity) -> Bool {
+        let completed = historySessions.filter(\.isCompleted)
+        switch self {
+        case .firstSession:
+            return !completed.isEmpty
+        case .consistency:
+            let calendar = Calendar.current
+            let last7 = (0..<7).compactMap { calendar.date(byAdding: .day, value: -$0, to: Date()) }
+            let daysWithSession = Set(last7.compactMap { d in completed.first(where: { calendar.isDate($0.date, inSameDayAs: d) }).map { _ in d } })
+            return daysWithSession.count >= 3
+        case .ecouteDuCorps:
+            return !injuryHistory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || injurySensitivity != .medium
+        case .volume:
+            return completed.count >= 10
+        }
+    }
+
+    func acquiredDate(historySessions: [WorkoutHistorySession]) -> Date? {
+        let completed = historySessions.filter(\.isCompleted).sorted(by: { $0.date < $1.date })
+        switch self {
+        case .firstSession: return completed.first?.date
+        case .volume: return completed.count >= 10 ? completed[9].date : nil
+        case .consistency:
+            let calendar = Calendar.current
+            let last7 = (0..<7).compactMap { calendar.date(byAdding: .day, value: -$0, to: Date()) }
+            let daysWithSession = last7.filter { d in completed.contains(where: { calendar.isDate($0.date, inSameDayAs: d) }) }
+            return daysWithSession.count >= 3 ? daysWithSession.sorted().last : nil
+        case .ecouteDuCorps: return nil
+        }
+    }
+}
+
+/// Item pour la modale détail (Identifiable pour .sheet(item:)).
+private struct BadgeDetailItem: Identifiable {
+    var id: EliteProfileBadge { badge }
+    let badge: EliteProfileBadge
+    let isAcquired: Bool
+    let acquiredDate: Date?
+}
+
+private struct HonneurBadgeView: View {
+    let badge: EliteProfileBadge
+    let isAcquired: Bool
+    let accentColor: Color
+    let borderColor: Color
+    var onTap: (() -> Void)?
+
+    var body: some View {
+        Button {
+            let generator = UIImpactFeedbackGenerator(style: .light)
+            generator.impactOccurred()
+            onTap?()
+        } label: {
+            Circle()
+                .fill(isAcquired ? accentColor.opacity(0.2) : Color.clear)
+                .frame(width: 44, height: 44)
+                .overlay(
+                    Image(systemName: badge.iconName)
+                        .font(.system(size: 20, weight: .light))
+                        .foregroundStyle(isAcquired ? accentColor : Color.gray.opacity(0.5))
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(isAcquired ? accentColor.opacity(0.6) : borderColor, lineWidth: isAcquired ? 1.2 : 0.8)
+                )
+                .shadow(color: isAcquired ? accentColor.opacity(0.35) : .clear, radius: 6, y: 2)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - BadgeDetailView (modale stylisée, glassmorphism, detents)
+
+private struct BadgeDetailView: View {
+    let item: BadgeDetailItem
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
+    @Environment(\.dismiss) private var dismiss
+
+    private var formattedAcquiredDate: String? {
+        guard let d = item.acquiredDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        formatter.locale = Locale(identifier: "fr_FR")
+        return formatter.string(from: d)
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                Image(systemName: item.badge.iconName)
+                    .font(.system(size: 64, weight: .light))
+                    .foregroundStyle(item.isAcquired ? accentColor : Color.gray.opacity(0.5))
+                    .shadow(color: item.isAcquired ? accentColor.opacity(0.6) : .clear, radius: 20, y: 4)
+                    .glow(color: accentColor, opacity: item.isAcquired ? (colorScheme == .dark ? 0.5 : 0.35) : 0, radius: item.isAcquired ? 24 : 0, y: 6)
+
+                Text(item.badge.displayName)
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                    .multilineTextAlignment(.center)
+
+                if item.isAcquired, let dateStr = formattedAcquiredDate {
+                    Text("Acquis le \(dateStr)")
+                        .font(.system(.subheadline, design: .rounded))
+                        .foregroundStyle(Color.secondary)
+                } else {
+                    Text("En cours...")
+                        .font(.system(.subheadline, design: .rounded))
+                        .foregroundStyle(accentColor)
+                }
+
+                Text(item.badge.criteriaDescription)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 24)
+
+                Spacer(minLength: 8)
+            }
+            .padding(.top, 32)
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+// MARK: - Sheet édition statut (âge, poids, objectif)
+
+private struct EditStatutSheet: View {
+    @Binding var age: Int
+    @Binding var weight: Double
+    @Binding var weightGoal: Double
+    @Binding var selectedPhysiqueGoal: PhysiqueGoal
+    var onSave: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Stepper("Âge : \(age)", value: $age, in: 10...90)
+                    Stepper("Poids : \(Int(weight)) kg", value: $weight, in: 40...150, step: 1)
+                    Stepper("Objectif poids : \(Int(weightGoal)) kg", value: $weightGoal, in: 40...150, step: 1)
+                }
+                Section("Objectif physique") {
+                    Picker("", selection: $selectedPhysiqueGoal) {
+                        ForEach(PhysiqueGoal.allCases, id: \.self) { goal in
+                            Text(goal.displayName).tag(goal)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+            .navigationTitle("Modifier mon statut")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("OK") {
+                        onSave()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Carte Elite (fond #1C1F26 / blanc, coins 20pt)
+
+private struct EliteProfileCardModifier: ViewModifier {
+    var background: Color
+    var border: Color
+    var cornerRadius: CGFloat = 18
+
+    func body(content: Content) -> some View {
+        content
+            .background(background)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(border, lineWidth: 0.5)
+            )
+    }
+}
+
+extension View {
+    fileprivate func eliteProfileCard(background: Color, border: Color, cornerRadius: CGFloat = 18) -> some View {
+        modifier(EliteProfileCardModifier(background: background, border: border, cornerRadius: cornerRadius))
+    }
+}
+
+
+// MARK: - Profile View (Elite Athlete Dashboard)
 
 struct ProfileView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
+    @Environment(\.textOnAccentColor) private var textOnAccentColor
+    @Environment(\.tabBarVisibilityStore) private var tabBarVisibilityStore
     @Query private var profiles: [UserProfile]
-    @StateObject private var healthKit = HealthKitManager.shared
-    @AppStorage("healthKitAutoSync") private var healthKitAutoSync: Bool = true
-
+    @Query(sort: \WorkoutHistorySession.date, order: .reverse) private var historySessions: [WorkoutHistorySession]
     @State private var age: Int = 25
     @State private var weight: Double = 70
     @State private var selectedPhysiqueGoal: PhysiqueGoal = .maintain
@@ -212,62 +455,157 @@ struct ProfileView: View {
     @State private var didLoadExistingProfile = false
     @State private var saveMessage: String?
 
+    private var eliteBackground: Color {
+        colorScheme == .dark ? EliteProfileBgDark : Color.white
+    }
+    private var eliteCardBackground: Color {
+        colorScheme == .dark ? EliteProfileCardDark : Color(.secondarySystemGroupedBackground)
+    }
+    private var eliteCardBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.gray.opacity(0.2)
+    }
+
+    /// Intensité du glow de l'avatar : plus forte si activité récente (séance complétée dans les 7 derniers jours).
+    private var hasRecentActivity: Bool {
+        let calendar = Calendar.current
+        guard let weekAgo = calendar.date(byAdding: .day, value: -7, to: Date()) else { return false }
+        return historySessions.contains { $0.isCompleted && $0.date >= weekAgo }
+    }
+
+    @State private var showEditStatutSheet: Bool = false
+    @State private var isStrategieExpanded: Bool = false
+    @State private var isSanteExpanded: Bool = false
+    @State private var selectedBadge: BadgeDetailItem?
+
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    headerCard
-                    objectifsCard
-                    logistiqueCard
-                    contexteSanteCard
-                    saveButton
-                    if let message = saveMessage {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                eliteHeader
+                statutLine
+                honneursSection
+                expandableStrategieCard
+                expandableSanteCard
+                if let message = saveMessage {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 100)
+                saveButton
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("Mon Profil")
-            .onAppear {
-                loadExistingProfileIfNeeded()
-                Task { await syncFromHealthKitIfNeeded() }
-            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 120)
+        }
+        .background(eliteBackground)
+        .navigationTitle("Mon Profil")
+        .toolbar(.hidden, for: .tabBar)
+        .sheet(isPresented: $showEditStatutSheet) {
+            EditStatutSheet(age: $age, weight: $weight, weightGoal: $weightGoal, selectedPhysiqueGoal: $selectedPhysiqueGoal, onSave: persistProfileMetrics)
+        }
+        .sheet(item: $selectedBadge) { item in
+            BadgeDetailView(item: item)
+        }
+        .onAppear {
+            tabBarVisibilityStore?.isSubPageActive = true
+            loadExistingProfileIfNeeded()
+        }
+        .onDisappear {
+            tabBarVisibilityStore?.isSubPageActive = false
         }
     }
 
-    // MARK: - 1. En-tête de synthèse
+    // MARK: - 1. Header Athlète (avatar + glow selon activité récente)
 
-    private var headerCard: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 72))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.blue.opacity(0.8), .purple.opacity(0.6)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+    private var eliteHeader: some View {
+        VStack(spacing: 12) {
+            Circle()
+                .strokeBorder(accentColor, lineWidth: 1.2)
+                .background(Circle().fill(eliteCardBackground))
+                .frame(width: 76, height: 76)
+                .overlay(
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 32, weight: .light))
+                        .foregroundStyle(accentColor.opacity(0.9))
+                )
+                .glow(
+                    color: accentColor,
+                    opacity: hasRecentActivity ? (colorScheme == .dark ? 0.5 : 0.35) : (colorScheme == .dark ? 0.25 : 0.15),
+                    radius: hasRecentActivity ? 18 : 12,
+                    y: 4
                 )
 
-            HStack(spacing: 0) {
-                DoubleTapEditableIntField(value: $age, label: "Âge", range: 10...90) { persistProfileMetrics() }
-                Divider()
-                    .frame(height: 44)
-                DoubleTapEditableDoubleField(value: $weight, label: "Poids actuel (kg)", range: 40...150, step: 1) { persistProfileMetrics() }
-                Divider()
-                    .frame(height: 44)
-                DoubleTapEditableDoubleField(value: $weightGoal, label: "Objectif (kg)", range: 40...150, step: 1) { persistProfileMetrics() }
-            }
-            .padding(.vertical, 8)
+            Text("Mon Profil")
+                .font(.largeTitle.bold())
+                .foregroundStyle(Color.primary)
         }
-        .padding()
-        .dashboardCard()
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    /// Section "Statut" : une ligne minimaliste "20 ans • 70 kg • Objectif : Maintien". Tap pour modifier.
+    private var statutLine: some View {
+        Button {
+            showEditStatutSheet = true
+        } label: {
+            HStack(spacing: 6) {
+                Text("\(age) ans")
+                    .font(.system(.subheadline, design: .monospaced))
+                Text("•")
+                    .foregroundStyle(.secondary)
+                Text("\(Int(weight)) kg")
+                    .font(.system(.subheadline, design: .monospaced))
+                Text("•")
+                    .foregroundStyle(.secondary)
+                Text("Objectif : \(selectedPhysiqueGoal.displayName)")
+                    .font(.system(.subheadline, design: .rounded))
+                Spacer(minLength: 4)
+                Image(systemName: "pencil.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(Color.primary)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .background(eliteCardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(eliteCardBorder, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Honneurs (badges Elite Achievements, interactifs + modale détail)
+
+    private var honneursSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Honneurs")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(EliteProfileBadge.allCases, id: \.self) { badge in
+                        let isAcquired = badge.isAcquired(profile: profiles.first, historySessions: historySessions, injuryHistory: injuryHistory, injurySensitivity: injurySensitivity)
+                        HonneurBadgeView(
+                            badge: badge,
+                            isAcquired: isAcquired,
+                            accentColor: accentColor,
+                            borderColor: eliteCardBorder,
+                            onTap: {
+                                selectedBadge = BadgeDetailItem(
+                                    badge: badge,
+                                    isAcquired: isAcquired,
+                                    acquiredDate: badge.acquiredDate(historySessions: historySessions)
+                                )
+                            }
+                        )
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
     }
 
     /// Sauvegarde âge / poids / objectif dans le profil SwiftData (sans tout le formulaire).
@@ -279,150 +617,162 @@ struct ProfileView: View {
         try? context.save()
     }
 
-    /// Récupère âge et poids depuis HealthKit et remplit les champs si vides ou si Auto-Sync activé.
-    private func syncFromHealthKitIfNeeded() async {
-        await healthKit.requestAuthorization()
-        await healthKit.fetchProfileData()
-        guard healthKitAutoSync || age == 0 || weight == 0 else { return }
-        if let hkAge = healthKit.healthKitAge, (age == 0 || healthKitAutoSync) {
-            age = min(90, max(10, hkAge))
-        }
-        if let hkWeight = healthKit.healthKitWeight, (weight == 0 || healthKitAutoSync) {
-            weight = min(150, max(40, hkWeight))
-        }
-        await MainActor.run { persistProfileMetrics() }
+    // MARK: - Cartes expandables (résumé par défaut, coins 20pt)
+
+    private var strategieSummaryText: String {
+        let days = availabilityDays.filter { $0 }.count
+        return "\(sessionsPerWeek) sém/sem • \(hoursPerSession == 1 ? "1 h" : String(format: "%.1f h", hoursPerSession)) • \(days) j/sem"
     }
 
-    // MARK: - 2. Objectifs & Stratégie
-
-    private var objectifsCard: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Objectifs & Stratégie")
-                .font(.headline.bold())
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Objectif physique")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    ForEach(PhysiqueGoal.allCases, id: \.self) { goal in
-                        physiqueGoalButton(goal)
-                    }
+    private var expandableStrategieCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isStrategieExpanded.toggle()
                 }
+            } label: {
+                HStack {
+                    Label("Ma Stratégie", systemImage: "target")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                        .symbolVariant(.none)
+                    Spacer()
+                    Text(isStrategieExpanded ? "" : strategieSummaryText)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Image(systemName: isStrategieExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
             }
+            .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Style d'entraînement")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    ForEach(TrainingStyleKind.allCases) { kind in
-                        trainingStyleButton(kind)
-                    }
-                }
-                if trainingStyleKind == .specificSport {
-                    Picker("Sport", selection: $specificSport) {
-                        ForEach(SpecificSport.allCases, id: \.self) { sport in
-                            Text(sport.displayName).tag(sport)
+            if isStrategieExpanded {
+                VStack(alignment: .leading, spacing: 18) {
+                    Divider().background(eliteCardBorder)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Objectif physique")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            ForEach(PhysiqueGoal.allCases, id: \.self) { goal in
+                                physiqueGoalCapsule(goal)
+                            }
                         }
                     }
-                    .pickerStyle(.segmented)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Style d'entraînement")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            ForEach(TrainingStyleKind.allCases) { kind in
+                                trainingStyleCapsule(kind)
+                            }
+                        }
+                        if trainingStyleKind == .specificSport {
+                            Picker("Sport", selection: $specificSport) {
+                                ForEach(SpecificSport.allCases, id: \.self) { sport in
+                                    Text(sport.displayName).tag(sport)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                    }
+                    HStack(alignment: .top, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Séances / semaine")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Stepper("", value: $sessionsPerWeek, in: 1...14)
+                                .labelsHidden()
+                            Text("\(sessionsPerWeek)")
+                                .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(accentColor)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Heures / séance")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Stepper("", value: $hoursPerSession, in: 0.5...3, step: 0.5)
+                                .labelsHidden()
+                            Text(String(format: "%.1f h", hoursPerSession))
+                                .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(accentColor)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Style de vie")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 10) {
+                            ForEach(0..<7, id: \.self) { index in
+                                dayBubble(index: index)
+                            }
+                        }
+                    }
                 }
+                .padding(.horizontal)
+                .padding(.bottom)
             }
         }
-        .padding()
-        .dashboardCard()
+        .eliteProfileCard(background: eliteCardBackground, border: eliteCardBorder, cornerRadius: 20)
     }
 
-    private func physiqueGoalButton(_ goal: PhysiqueGoal) -> some View {
+    private func physiqueGoalCapsule(_ goal: PhysiqueGoal) -> some View {
         let isSelected = selectedPhysiqueGoal == goal
         return Button {
             selectedPhysiqueGoal = goal
         } label: {
-            VStack(spacing: 6) {
+            HStack(spacing: 6) {
                 Image(systemName: goal.iconName)
-                    .font(.title2)
+                    .font(.subheadline.weight(.semibold))
                 Text(goal.displayName)
-                    .font(.caption.bold())
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(isSelected ? Color.accentColor.opacity(0.2) : Color(.tertiarySystemFill))
-            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(isSelected ? accentColor.opacity(0.25) : Color.clear)
+            .foregroundStyle(isSelected ? accentColor : Color.primary)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(isSelected ? accentColor.opacity(0.6) : eliteCardBorder, lineWidth: isSelected ? 1 : 0.5)
+            )
         }
         .buttonStyle(.plain)
     }
 
-    private func trainingStyleButton(_ kind: TrainingStyleKind) -> some View {
+    private func trainingStyleCapsule(_ kind: TrainingStyleKind) -> some View {
         let isSelected = trainingStyleKind == kind
         return Button {
             trainingStyleKind = kind
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: kind.iconName)
-                    .font(.body)
+                    .font(.caption.weight(.semibold))
                 Text(kind.displayName)
-                    .font(.subheadline.bold())
+                    .font(.caption.weight(.semibold))
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(isSelected ? Color.accentColor.opacity(0.2) : Color(.tertiarySystemFill))
-            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.vertical, 8)
+            .background(isSelected ? accentColor.opacity(0.25) : Color.clear)
+            .foregroundStyle(isSelected ? accentColor : Color.primary)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(isSelected ? accentColor.opacity(0.6) : eliteCardBorder, lineWidth: isSelected ? 1 : 0.5)
+            )
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - 3. Logistique & Disponibilités
-
-    private var logistiqueCard: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Logistique & Disponibilités")
-                .font(.headline.bold())
-
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Séances / semaine")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.secondary)
-                    Stepper("\(sessionsPerWeek)", value: $sessionsPerWeek, in: 1...14)
-                        .labelsHidden()
-                    Text("\(sessionsPerWeek)")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                }
-                .frame(maxWidth: .infinity)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Heures / séance")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.secondary)
-                    Stepper("\(hoursPerSession, specifier: "%.1f") h", value: $hoursPerSession, in: 0.5...3, step: 0.5)
-                        .labelsHidden()
-                    Text("\(hoursPerSession, specifier: "%.1f") h")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                }
-                .frame(maxWidth: .infinity)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Disponibilité hebdomadaire")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    ForEach(0..<7, id: \.self) { index in
-                        dayBubble(index: index)
-                    }
-                }
-            }
-        }
-        .padding()
-        .dashboardCard()
-    }
-
+    /// Jours L M M J V S D : petit cercle, sélectionné = plein accentColor, sinon contour uniquement.
     private func dayBubble(index: Int) -> some View {
         let isAvailable = availabilityDays.indices.contains(index) && availabilityDays[index]
         return Button {
@@ -431,101 +781,134 @@ struct ProfileView: View {
             }
         } label: {
             Text(dayLabels[index])
-                .font(.caption.bold())
-                .frame(width: 36, height: 36)
-                .background(isAvailable ? Color.accentColor.opacity(0.3) : Color(.tertiarySystemFill))
-                .foregroundStyle(isAvailable ? Color.accentColor : Color.secondary)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .frame(width: 32, height: 32)
+                .background(isAvailable ? accentColor : Color.clear)
+                .foregroundStyle(isAvailable ? textOnAccentColor : Color.secondary)
                 .clipShape(Circle())
                 .overlay(
                     Circle()
-                        .strokeBorder(Color.secondary.opacity(isAvailable ? 0.2 : 0.4), lineWidth: 1)
+                        .strokeBorder(isAvailable ? accentColor : eliteCardBorder, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - 4. Contexte Santé & Passif
+    private var santeSummaryText: String {
+        if !injuryHistory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Santé : blessures renseignées"
+        }
+        if !sportsHistory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Santé : historique renseigné"
+        }
+        return "Santé : à compléter"
+    }
 
-    private var contexteSanteCard: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Contexte Santé & Passif")
-                .font(.headline.bold())
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Blessures & Antécédents")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                TextEditor(text: $injuryHistory)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 80)
-                    .padding(12)
-                    .background(Color(.tertiarySystemFill))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-                    )
+    private var expandableSanteCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    isSanteExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Label("Mon Profil Santé", systemImage: "heart.text.square")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                        .symbolVariant(.none)
+                    Spacer()
+                    Text(isSanteExpanded ? "" : santeSummaryText)
+                        .font(.system(.caption, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Image(systemName: isSanteExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
             }
+            .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sensibilité aux blessures")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                Picker("", selection: $injurySensitivity) {
-                    ForEach(InjurySensitivity.allCases, id: \.self) { level in
-                        Text(level.displayName).tag(level)
+            if isSanteExpanded {
+                VStack(alignment: .leading, spacing: 18) {
+                    Divider().background(eliteCardBorder)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Blessures & Antécédents")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $injuryHistory)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 72)
+                            .padding(10)
+                            .background(Color(.tertiarySystemFill).opacity(0.8))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .strokeBorder(eliteCardBorder, lineWidth: 0.5)
+                            )
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Sensibilité aux blessures")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: $injurySensitivity) {
+                            ForEach(InjurySensitivity.allCases, id: \.self) { level in
+                                Text(level.displayName).tag(level)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Historique sportif")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $sportsHistory)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 52)
+                            .padding(10)
+                            .background(Color(.tertiarySystemFill).opacity(0.8))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .strokeBorder(eliteCardBorder, lineWidth: 0.5)
+                            )
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Sports actuels parallèles")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $currentOtherSports)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 44)
+                            .padding(10)
+                            .background(Color(.tertiarySystemFill).opacity(0.8))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .strokeBorder(eliteCardBorder, lineWidth: 0.5)
+                            )
                     }
                 }
-                .pickerStyle(.segmented)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Historique sportif")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                TextEditor(text: $sportsHistory)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 60)
-                    .padding(12)
-                    .background(Color(.tertiarySystemFill))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-                    )
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sports actuels parallèles")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                TextEditor(text: $currentOtherSports)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 50)
-                    .padding(12)
-                    .background(Color(.tertiarySystemFill))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-                    )
+                .padding(.horizontal)
+                .padding(.bottom)
             }
         }
-        .padding()
-        .dashboardCard()
+        .eliteProfileCard(background: eliteCardBackground, border: eliteCardBorder, cornerRadius: 20)
     }
 
     private var saveButton: some View {
         Button(action: saveProfile) {
             Text("Enregistrer le profil")
-                .font(.headline)
+                .font(.headline.weight(.semibold))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(Color.accentColor)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .padding(.vertical, 18)
+                .background(accentColor)
+                .foregroundStyle(textOnAccentColor)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
         }
         .buttonStyle(.plain)
+        .padding(.top, 28)
+        .padding(.bottom, 12)
     }
 
     // MARK: - Chargement & Sauvegarde
@@ -549,7 +932,7 @@ struct ProfileView: View {
         migrateAndLoadAvailableDays(profile)
         availabilityDays = (0..<7).map { profile.availableDays.contains($0) }
 
-        switch profile.trainingStyle {
+        switch profile.trainingStyle ?? .bodybuilding {
         case .bodybuilding: trainingStyleKind = .bodybuilding
         case .marathon: trainingStyleKind = .marathon
         case .hybrid: trainingStyleKind = .hybrid
@@ -582,8 +965,6 @@ struct ProfileView: View {
     }
 
     private func saveProfile() {
-        let trainingStyle = buildTrainingStyle()
-
         let profile: UserProfile
         if let existing = profiles.first {
             profile = existing
@@ -595,7 +976,7 @@ struct ProfileView: View {
         profile.age = age
         profile.weight = weight
         profile.physiqueGoal = selectedPhysiqueGoal
-        profile.trainingStyle = trainingStyle
+        profile.trainingStyle = buildTrainingStyle()
         profile.injuryHistory = injuryHistory
         profile.injurySensitivity = injurySensitivity
         profile.sessionsPerWeek = sessionsPerWeek

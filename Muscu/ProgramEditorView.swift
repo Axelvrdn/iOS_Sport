@@ -2,7 +2,8 @@
 //  ProgramEditorView.swift
 //  Muscu
 //
-//  Dashboard "Framework-style" pour éditer un programme (semaines / jours variables).
+//  Rôle : Éditeur de TrainingProgram (semaines accordéon, jours en bulles, DayEditorView, SessionRecipe, swipe actions, réplication jour précédent).
+//  Utilisé par : WorkoutView (navigation depuis « Mes programmes » double-tap, NewProgramSheet après création).
 //
 
 import SwiftUI
@@ -76,6 +77,7 @@ struct ProgramEditorView: View {
         }
         .navigationTitle("Éditeur de programme")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
     }
 
     private func addWeek() {
@@ -92,6 +94,7 @@ struct ProgramEditorView: View {
 
 private struct WeekCardView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.accentColor) private var accentColor
     @Bindable var week: TrainingWeek
     var isExpanded: Bool
     var onToggle: () -> Void
@@ -145,9 +148,7 @@ private struct WeekCardView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
                             ForEach(days) { day in
-                                NavigationLink {
-                                    DayEditorView(day: day)
-                                } label: {
+                                NavigationLink(value: day.persistentModelID) {
                                     DayBubbleView(day: day)
                                 }
                                 .buttonStyle(.plain)
@@ -293,6 +294,7 @@ private struct WeekCardView: View {
 // MARK: - Day Bubble (cercle coloré selon focus — utilisé dans l’accordéon des semaines)
 
 private struct DayBubbleView: View {
+    @Environment(\.accentColor) private var accentColor
     @Bindable var day: TrainingDay
 
     var body: some View {
@@ -316,7 +318,7 @@ private struct DayBubbleView: View {
     private var bubbleColor: Color {
         if day.isRestDay { return Color.gray.opacity(0.25) }
         switch day.focusCategory {
-        case .lowerBody, .legs: return Color.green.opacity(0.3)
+        case .lowerBody, .legs: return accentColor.opacity(0.3)
         case .upperBody, .push, .pull: return Color.blue.opacity(0.3)
         case .plyometrics: return Color.orange.opacity(0.3)
         case .cardio: return Color.purple.opacity(0.3)
@@ -329,6 +331,7 @@ private struct DayBubbleView: View {
 // MARK: - Day Card Row (style carte : fond arrondi, ombre, icône FocusCategory)
 
 private struct DayCardRow: View {
+    @Environment(\.accentColor) private var accentColor
     @Bindable var day: TrainingDay
 
     var body: some View {
@@ -375,7 +378,7 @@ private struct DayCardRow: View {
     private var focusColor: Color {
         if day.isRestDay { return .gray }
         switch day.focusCategory {
-        case .lowerBody, .legs: return .green
+        case .lowerBody, .legs: return accentColor
         case .upperBody, .push, .pull: return .blue
         case .plyometrics: return .orange
         case .cardio: return .purple
@@ -411,17 +414,64 @@ private struct MasterWrapper: Identifiable, Equatable {
     }
 }
 
-// MARK: - Day Editor (Leaf View)
+// MARK: - Day Editor (Leaf View — résolution par ID pour stabilité NavigationStack)
 
 struct DayEditorView: View {
     @Environment(\.modelContext) private var context
+    var dayID: PersistentIdentifier
+    var onDismiss: (() -> Void)?
+
+    var body: some View {
+        if let day = context.model(for: dayID) as? TrainingDay {
+            DayEditorContentView(day: day, onDismiss: onDismiss)
+                .id(dayID)
+        } else {
+            ContentUnavailableView("Jour introuvable", systemImage: "calendar.badge.exclamationmark")
+        }
+    }
+}
+
+// MARK: - Day Editor Elite Design (couleurs adaptatives)
+
+private let DayEditorBgDark = Color(red: 15/255, green: 17/255, blue: 21/255)   // #0F1115
+private let DayEditorCardDark = Color(red: 28/255, green: 31/255, blue: 38/255) // #1C1F26
+
+// MARK: - Day Editor Content (formulaire lié au modèle résolu — DA Elite Athlete)
+
+private struct DayEditorContentView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accentColor) private var accentColor
+    @Environment(\.dismiss) private var dismiss
     @Bindable var day: TrainingDay
+    var onDismiss: (() -> Void)?
 
     @State private var showExercisePicker = false
     @State private var configTarget: MasterWrapper?
     @State private var showConfigSheet = false
     @State private var exerciseToEdit: SessionExercise?
     @State private var showExerciseEditor = false
+    @Environment(\.editMode) private var editMode
+
+    /// Fond d'écran : charbon profond en dark, transparent en light (système).
+    private var pageBackground: Color {
+        colorScheme == .dark ? DayEditorBgDark : Color.clear
+    }
+    /// Fond des cartes : #1C1F26 en dark, blanc pur en light.
+    private var cardBackground: Color {
+        colorScheme == .dark ? DayEditorCardDark : Color.white
+    }
+    /// Bordure des cartes : très discrète (pas d'accent sur les contours).
+    private var cardBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.05) : Color.gray.opacity(0.1)
+    }
+    /// Bordure des capsules Objectif/Focus : discrète en dark, accent discret en light.
+    private var capsuleBorderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : accentColor.opacity(0.5)
+    }
+    private var buttonTextOnAccent: Color {
+        colorScheme == .light ? .black : Color(red: 15/255, green: 17/255, blue: 21/255)
+    }
 
     private static let presetExercises: [(name: String, target: String, scheme: String, focus: FocusCategory)] = [
         ("Squat", "Quadriceps / Fessiers", "3x10", .lowerBody),
@@ -436,82 +486,35 @@ struct DayEditorView: View {
     ]
 
     var body: some View {
-        List {
-            Section("Focus du jour") {
-                Picker("Catégorie", selection: Binding(
-                    get: { day.focusCategory },
-                    set: { day.focusCategory = $0; day.isRestDay = ($0 == .none); try? context.save() }
-                )) {
-                    ForEach(FocusCategory.allCases, id: \.self) { cat in
-                        Text(displayName(cat)).tag(cat)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Focus du jour — carte
+                dayFocusCard
+
+                if day.sessionRecipe != nil {
+                    sessionRecipeContent
+                } else {
+                    createSessionCard
                 }
-                .pickerStyle(.menu)
 
-                Toggle("Jour de repos", isOn: Binding(
-                    get: { day.isRestDay },
-                    set: { day.isRestDay = $0; if $0 { day.focusCategory = .none }; try? context.save() }
-                ))
-
-                TextField("Titre du jour", text: Binding(
-                    get: { day.title },
-                    set: { day.title = $0; try? context.save() }
-                ))
+                // Legacy exercises section (compact)
+                if !day.exercises.isEmpty {
+                    legacySection
+                }
+                legacyActionsCard
             }
-
-            // Séance atomique (SessionRecipe + ExerciseMaster)
-            if day.sessionRecipe != nil {
-                sessionRecipeSection
-            } else {
-                Section("Séance (système atomique)") {
-                    Button {
-                        createSessionRecipe()
-                    } label: {
-                        Label("Créer une séance (recette)", systemImage: "plus.circle.fill")
-                    }
-                }
-            }
-
-            Section("Exercices (legacy)") {
-                ForEach(day.exercises) { ex in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(ex.name).font(.subheadline.bold())
-                            Text(ex.setsRepsDescription).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 4)
-                }
-                .onDelete { indexSet in
-                    for i in indexSet.sorted(by: >) {
-                        let ex = day.exercises[i]
-                        context.delete(ex)
-                        day.exercises.remove(at: i)
-                    }
-                    try? context.save()
-                }
-
-                Menu {
-                    ForEach(Self.presetExercises, id: \.name) { preset in
-                        Button(preset.name) {
-                            addPresetExercise(preset)
-                        }
-                    }
-                } label: {
-                    Label("Ajouter depuis les presets", systemImage: "list.bullet")
-                }
-
-                Button {
-                    replicatePreviousDay()
-                } label: {
-                    Label("Répliquer le jour précédent", systemImage: "doc.on.doc.fill")
-                }
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 120)
         }
-        .navigationTitle(day.title.isEmpty ? "Jour \(day.dayIndex + 1)" : day.title)
+        .scrollContentBackground(.hidden)
+        .background(pageBackground)
+        .navigationTitle(day.sessionRecipe?.name ?? (day.title.isEmpty ? "Jour \(day.dayIndex + 1)" : day.title))
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(false)
+        .toolbar(.hidden, for: .tabBar)
         .sheet(isPresented: $showExercisePicker) {
-            if let recipe = day.sessionRecipe {
+            if day.sessionRecipe != nil {
                 ExercisePickerView { master in
                     configTarget = MasterWrapper(master: master)
                     showExercisePicker = false
@@ -538,6 +541,111 @@ struct DayEditorView: View {
                     }
             }
         }
+        .onDisappear {
+            try? context.save()
+            onDismiss?()
+        }
+    }
+
+    private var dayFocusCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Focus du jour")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.secondary)
+            Picker("Catégorie", selection: Binding(
+                get: { day.focusCategory },
+                set: { day.focusCategory = $0; day.isRestDay = ($0 == .none) }
+            )) {
+                ForEach(FocusCategory.allCases, id: \.self) { cat in
+                    Text(displayName(cat)).tag(cat)
+                }
+            }
+            .pickerStyle(.menu)
+            .accentColor(accentColor)
+            Toggle("Jour de repos", isOn: Binding(
+                get: { day.isRestDay },
+                set: { day.isRestDay = $0; if $0 { day.focusCategory = .none } }
+            ))
+            .tint(accentColor)
+            TextField("Titre du jour", text: $day.title)
+                .textFieldStyle(.plain)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(cardBorder, lineWidth: 0.5))
+        .shadow(color: colorScheme == .dark ? Color.black.opacity(0.25) : Color.black.opacity(0.06), radius: colorScheme == .dark ? 8 : 10, x: 0, y: 4)
+    }
+
+    private var createSessionCard: some View {
+        Button {
+            createSessionRecipe()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(accentColor)
+                Text("Créer une séance (recette)")
+                    .font(.headline)
+                    .foregroundStyle(buttonTextOnAccent)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(accentColor)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var legacySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Exercices (legacy)")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.secondary)
+            ForEach(day.exercises) { ex in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(ex.name)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(Color.primary)
+                        Text(ex.setsRepsDescription)
+                            .font(.caption)
+                            .foregroundStyle(Color.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .background(cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .background(Color.clear)
+    }
+
+    private var legacyActionsCard: some View {
+        VStack(spacing: 12) {
+            Menu {
+                ForEach(Self.presetExercises, id: \.name) { preset in
+                    Button(preset.name) { addPresetExercise(preset) }
+                }
+            } label: {
+                Label("Ajouter depuis les presets", systemImage: "list.bullet")
+                    .font(.subheadline)
+                    .foregroundStyle(accentColor)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            Button {
+                replicatePreviousDay()
+            } label: {
+                Label("Répliquer le jour précédent", systemImage: "doc.on.doc.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(accentColor)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+        }
     }
 
     private func deleteSessionExercise(_ se: SessionExercise, from recipe: SessionRecipe) {
@@ -547,67 +655,206 @@ struct DayEditorView: View {
     }
 
     @ViewBuilder
-    private var sessionRecipeSection: some View {
+    private var sessionRecipeContent: some View {
         if let recipe = day.sessionRecipe {
-            Section("Séance (recette)") {
-                TextField("Nom de la séance", text: Binding(
-                    get: { recipe.name },
-                    set: { recipe.name = $0; try? context.save() }
-                ))
-                Picker("Objectif", selection: Binding(
-                    get: { recipe.goal },
-                    set: { recipe.goal = $0; try? context.save() }
-                )) {
-                    ForEach(SessionGoal.allCases, id: \.self) { g in
-                        Text(sessionGoalLabel(g)).tag(g)
-                    }
+            VStack(alignment: .leading, spacing: 16) {
+                // Objectif / Focus : pastilles fines (bordure seule, pas de fond opaque)
+                HStack(spacing: 10) {
+                    capsulePicker(
+                        title: "Objectif",
+                        selection: Binding(get: { recipe.goal }, set: { recipe.goal = $0 }),
+                        options: SessionGoal.allCases,
+                        label: sessionGoalLabel
+                    )
+                    capsulePickerBodyFocus(
+                        selection: Binding(get: { recipe.bodyFocus }, set: { recipe.bodyFocus = $0 })
+                    )
                 }
-                .pickerStyle(.menu)
-                Picker("Focus corps", selection: Binding(
-                    get: { recipe.bodyFocus },
-                    set: { recipe.bodyFocus = $0; try? context.save() }
-                )) {
-                    ForEach(BodyFocus.allCases, id: \.self) { b in
-                        Text(b.rawValue.capitalized).tag(b)
-                    }
-                }
-                .pickerStyle(.menu)
+                .padding(.horizontal, 4)
+                .background(Color.clear)
 
-                ForEach(recipe.exercises) { se in
+                // Exercices : ScrollView + LazyVStack (cartes 20pt, bordure 0.5 accent)
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(se.exercise?.name ?? "—")
-                                .font(.subheadline.bold())
-                            Text("\(se.sets) × \(se.reps) · \(loadSummary(se))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text("Exercices")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
                         Spacer()
+                        EditButton()
+                            .font(.subheadline)
+                            .foregroundStyle(accentColor)
                     }
-                    .padding(.vertical, 4)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            deleteSessionExercise(se, from: recipe)
-                        } label: {
-                            Label("Supprimer", systemImage: "trash")
-                        }
-                        Button {
-                            exerciseToEdit = se
-                            showExerciseEditor = true
-                        } label: {
-                            Label("Modifier", systemImage: "pencil")
-                        }
-                        .tint(.blue)
-                    }
-                }
+                    .padding(.horizontal, 4)
+                    .background(Color.clear)
 
-                Button {
-                    showExercisePicker = true
-                } label: {
-                    Label("Ajouter un exercice (bibliothèque)", systemImage: "plus.circle")
+                    if recipe.exercises.isEmpty {
+                        Text("Aucun exercice")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                            .background(cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(cardBorder, lineWidth: 0.5))
+                            .shadow(color: colorScheme == .dark ? Color.black.opacity(0.25) : Color.black.opacity(0.06), radius: 8, x: 0, y: 4)
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 16) {
+                                ForEach(Array(recipe.exercises.enumerated()), id: \.element.persistentModelID) { index, se in
+                                    sessionExerciseCard(se: se, recipe: recipe, index: index, total: recipe.exercises.count)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .scrollIndicators(.hidden)
+                        .frame(maxHeight: 400)
+                    }
+
+                    Button {
+                        showExercisePicker = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus.circle")
+                                .foregroundStyle(accentColor)
+                            Text("Ajouter un exercice (bibliothèque)")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(accentColor)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.clear)
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(capsuleBorderColor, lineWidth: 0.5))
+                    }
                 }
             }
         }
+    }
+
+    private func sessionExerciseCard(se: SessionExercise, recipe: SessionRecipe, index: Int, total: Int) -> some View {
+        HStack(spacing: 12) {
+            if editMode?.wrappedValue == .active {
+                Image(systemName: "line.3.horizontal")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(accentColor)
+                VStack(spacing: 4) {
+                    Button {
+                        moveExercise(from: index, to: index - 1, recipe: recipe)
+                    } label: {
+                        Image(systemName: "chevron.up")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(accentColor)
+                    }
+                    .disabled(index == 0)
+                    Button {
+                        moveExercise(from: index, to: index + 1, recipe: recipe)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(accentColor)
+                    }
+                    .disabled(index >= total - 1)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(se.exercise?.name ?? "—")
+                    .font(.headline.bold())
+                    .foregroundStyle(Color.primary)
+                Text("\(se.sets) × \(se.reps) · \(loadSummary(se))")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+            }
+            Spacer()
+            if editMode?.wrappedValue != .active {
+                Menu {
+                    Button {
+                        exerciseToEdit = se
+                        showExerciseEditor = true
+                    } label: {
+                        Label("Modifier", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        deleteSessionExercise(se, from: recipe)
+                    } label: {
+                        Label("Supprimer", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundStyle(accentColor)
+                }
+            }
+        }
+        .padding(16)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(cardBorder, lineWidth: 0.5))
+        .shadow(color: colorScheme == .dark ? Color.black.opacity(0.25) : Color.black.opacity(0.06), radius: 8, x: 0, y: 4)
+    }
+
+    private func moveExercise(from sourceIndex: Int, to destIndex: Int, recipe: SessionRecipe) {
+        guard destIndex >= 0, destIndex < recipe.exercises.count, sourceIndex != destIndex else { return }
+        var ord = recipe.exercises
+        let item = ord.remove(at: sourceIndex)
+        ord.insert(item, at: destIndex)
+        recipe.exercises = ord
+        try? context.save()
+    }
+
+    private func capsulePicker<T: Hashable>(
+        title: String,
+        selection: Binding<T>,
+        options: [T],
+        label: @escaping (T) -> String
+    ) -> some View {
+        Menu {
+            ForEach(options, id: \.self) { opt in
+                Button(label(opt)) {
+                    selection.wrappedValue = opt
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+                Text(label(selection.wrappedValue))
+                    .font(.subheadline.weight(.medium))
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.clear)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(capsuleBorderColor, lineWidth: 0.5))
+        }
+        .foregroundStyle(Color.primary)
+    }
+
+    private func capsulePickerBodyFocus(selection: Binding<BodyFocus>) -> some View {
+        Menu {
+            ForEach(BodyFocus.allCases, id: \.self) { b in
+                Button(b.rawValue.capitalized) {
+                    selection.wrappedValue = b
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text("Focus")
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+                Text(selection.wrappedValue.rawValue.capitalized)
+                    .font(.subheadline.weight(.medium))
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.clear)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(capsuleBorderColor, lineWidth: 0.5))
+        }
+        .foregroundStyle(Color.primary)
     }
 
     private func sessionGoalLabel(_ g: SessionGoal) -> String {

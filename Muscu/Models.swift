@@ -2,7 +2,8 @@
 //  Models.swift
 //  Muscu
 //
-//  Core SwiftData models and supporting types for the fitness app.
+//  Rôle : Modèles SwiftData (UserProfile, WorkoutProgram/Legacy, TrainingProgram atomique, ExerciseMaster, SessionRecipe/SessionExercise) et enums partagés.
+//  Utilisé par : Toute l’app (persistance, vues, DataController, WorkoutManager).
 //
 
 import Foundation
@@ -76,6 +77,13 @@ enum InjurySensitivity: String, Codable, CaseIterable {
     case high
 }
 
+/// Niveau d'historique sportif (onboarding & profil).
+enum SportsHistoryLevel: String, Codable, CaseIterable {
+    case beginner
+    case intermediate
+    case advanced
+}
+
 // MARK: - FocusCategory (Program Builder)
 
 enum FocusCategory: String, Codable, CaseIterable {
@@ -133,6 +141,29 @@ enum SportCategory: String, Codable, CaseIterable {
     case general
 }
 
+// MARK: - BodyPart (zones pour protocole blessure)
+
+enum BodyPart: String, Codable, CaseIterable {
+    case shoulder
+    case knee
+    case back
+    case wrist
+    case hip
+    case neck
+    case ankle
+}
+
+// MARK: - CoachProtocol (protocoles de santé activables par l’IA)
+
+enum CoachProtocol: Codable, Equatable {
+    /// Adapter la séance en évitant la zone blessée.
+    case injury(zone: BodyPart?)
+    /// Réduire l’intensité de la semaine (-50 % volume).
+    case deload
+    /// Ajouter une semaine de repos total.
+    case fullRest
+}
+
 // MARK: - UserProfile
 
 @Model
@@ -140,7 +171,8 @@ final class UserProfile {
     var age: Int
     var weight: Double
     var physiqueGoal: PhysiqueGoal
-    var trainingStyle: TrainingStyle
+    /// Optionnel pour tolérer les données existantes où SwiftData peut renvoyer un type non convertible.
+    var trainingStyle: TrainingStyle?
     var injuryHistory: String
     var injurySensitivity: InjurySensitivity
     var sessionsPerWeek: Int
@@ -154,6 +186,12 @@ final class UserProfile {
     var availabilityJSON: String
     /// Jours disponibles pour l'entraînement (0=Lun … 6=Dim), stocké "0,1,2,3,4,5,6"
     var availableDaysString: String
+    /// Zones du corps sensibles/blessées (IDs ex: knee_left, shoulder_right), stocké JSON array.
+    var injuredZonesJSON: String
+    /// Dernière séance : date, durée (s), volume total (kg)
+    var lastWorkoutDate: Date
+    var lastWorkoutDurationSeconds: Int
+    var lastWorkoutTotalVolumeKg: Double
 
     @Relationship(deleteRule: .cascade)
     var workoutPrograms: [WorkoutProgram] = []
@@ -175,7 +213,11 @@ final class UserProfile {
         weightGoal: Double = 0,
         strictnessLevel: Double = 0.5,
         availabilityJSON: String = "{}",
-        availableDaysString: String = "0,1,2,3,4,5,6"
+        availableDaysString: String = "0,1,2,3,4,5,6",
+        injuredZonesJSON: String = "[]",
+        lastWorkoutDate: Date = .distantPast,
+        lastWorkoutDurationSeconds: Int = 0,
+        lastWorkoutTotalVolumeKg: Double = 0
     ) {
         self.age = age
         self.weight = weight
@@ -191,6 +233,10 @@ final class UserProfile {
         self.strictnessLevel = strictnessLevel
         self.availabilityJSON = availabilityJSON
         self.availableDaysString = availableDaysString
+        self.injuredZonesJSON = injuredZonesJSON
+        self.lastWorkoutDate = lastWorkoutDate
+        self.lastWorkoutDurationSeconds = lastWorkoutDurationSeconds
+        self.lastWorkoutTotalVolumeKg = lastWorkoutTotalVolumeKg
     }
 }
 
@@ -204,6 +250,20 @@ extension UserProfile {
         }
         set {
             availableDaysString = newValue.sorted().map(String.init).joined(separator: ",")
+        }
+    }
+
+    /// Zones du corps marquées comme sensibles/blessées (IDs pour SceneKit / UI).
+    var injuredZones: [String] {
+        get {
+            guard let data = injuredZonesJSON.data(using: .utf8),
+                  let arr = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+            return arr
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue), let s = String(data: data, encoding: .utf8) {
+                injuredZonesJSON = s
+            }
         }
     }
 }
@@ -358,6 +418,8 @@ final class WorkoutHistorySession {
     var averageRestTimeSeconds: Int
     /// Durée totale de la séance en secondes
     var totalDurationSeconds: Int
+    /// Volume total (somme reps × charge en kg) pour la séance
+    var totalVolumeKg: Double
     /// Indique si la séance a été complétée
     var isCompleted: Bool
     /// Indique si la séance a été explicitement skippée
@@ -374,6 +436,7 @@ final class WorkoutHistorySession {
         completionPercentage: Int = 0,
         averageRestTimeSeconds: Int = 60,
         totalDurationSeconds: Int = 0,
+        totalVolumeKg: Double = 0,
         isCompleted: Bool = false,
         isSkipped: Bool = false
     ) {
@@ -384,6 +447,7 @@ final class WorkoutHistorySession {
         self.completionPercentage = completionPercentage
         self.averageRestTimeSeconds = averageRestTimeSeconds
         self.totalDurationSeconds = totalDurationSeconds
+        self.totalVolumeKg = totalVolumeKg
         self.isCompleted = isCompleted
         self.isSkipped = isSkipped
     }
@@ -473,6 +537,8 @@ final class ExerciseMaster {
     /// Stocké "chest,legs" pour SwiftData
     var musclesTargetedString: String
     var defaultRestTime: Int
+    /// Record personnel : 1RM estimé (formule Brzycki) mis à jour à chaque PR.
+    var estimatedOneRM: Double
 
     init(
         name: String,
@@ -480,7 +546,8 @@ final class ExerciseMaster {
         videoUrl: String? = nil,
         exerciseDescription: String = "",
         musclesTargetedString: String = "",
-        defaultRestTime: Int = 60
+        defaultRestTime: Int = 60,
+        estimatedOneRM: Double = 0
     ) {
         self.name = name
         self.visualAsset = visualAsset
@@ -488,6 +555,7 @@ final class ExerciseMaster {
         self.exerciseDescription = exerciseDescription
         self.musclesTargetedString = musclesTargetedString
         self.defaultRestTime = defaultRestTime
+        self.estimatedOneRM = estimatedOneRM
     }
 }
 
@@ -587,6 +655,44 @@ final class WorkoutSession {
     init(title: String, notes: String = "") {
         self.title = title
         self.notes = notes
+    }
+}
+
+// MARK: - ExerciseSetResult (série enregistrée, liée à l'utilisateur et à l'exercice — stats & 1RM)
+
+@Model
+final class ExerciseSetResult {
+    var date: Date
+    var exerciseName: String
+    var setIndex: Int
+    var reps: Int
+    var weight: Double
+    /// 1RM estimé pour cette série (Brzycki).
+    var estimatedOneRM: Double
+
+    @Relationship
+    var exercise: ExerciseMaster?
+    @Relationship
+    var user: UserProfile?
+
+    init(
+        date: Date = .now,
+        exerciseName: String,
+        setIndex: Int,
+        reps: Int,
+        weight: Double,
+        estimatedOneRM: Double,
+        exercise: ExerciseMaster? = nil,
+        user: UserProfile? = nil
+    ) {
+        self.date = date
+        self.exerciseName = exerciseName
+        self.setIndex = setIndex
+        self.reps = reps
+        self.weight = weight
+        self.estimatedOneRM = estimatedOneRM
+        self.exercise = exercise
+        self.user = user
     }
 }
 

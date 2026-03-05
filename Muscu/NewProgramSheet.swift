@@ -2,7 +2,8 @@
 //  NewProgramSheet.swift
 //  Muscu
 //
-//  Feuille de création d’un nouveau programme (configuration rapide avant l’éditeur).
+//  Rôle : Formulaire de création d'un programme (nom, catégorie SportCategory) ; appelle DataController.createNewProgram au validement.
+//  Utilisé par : WorkoutView (sheet « Ajouter un programme »).
 //
 
 import SwiftUI

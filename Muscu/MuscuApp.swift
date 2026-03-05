@@ -2,7 +2,8 @@
 //  MuscuApp.swift
 //  Muscu
 //
-//  Created by Axel Verdon on 27/01/2026.
+//  Rôle : Point d’entrée de l’app ; configure le ModelContainer SwiftData et affiche le splash puis ContentView.
+//  Utilisé par : Aucun (racine).
 //
 
 import SwiftUI
@@ -12,7 +13,7 @@ import SwiftData
 struct MuscuApp: App {
     var body: some Scene {
         WindowGroup {
-            RootView()
+            OnboardingContainerView()
         }
         .modelContainer(for: [
             UserProfile.self,
@@ -21,6 +22,7 @@ struct MuscuApp: App {
             DailyLog.self,
             WorkoutHistorySession.self,
             WorkoutLog.self,
+            ExerciseSetResult.self,
             TrainingProgram.self,
             TrainingWeek.self,
             TrainingDay.self,
@@ -29,11 +31,13 @@ struct MuscuApp: App {
             SessionExercise.self,
             SessionRecipe.self
         ])
+        // Tous les @Model de Models.swift sont listés ci‑dessus. Ne pas ajouter de MigrationPlan
+        // ni modifier les deleteRule sans coordination (risque de corruptions).
     }
 }
 
-/// Vue racine : splash (Diamond) puis contenu principal.
-private struct RootView: View {
+/// Vue racine : splash (Diamond) puis contenu principal. Visible par OnboardingContainerView.
+struct RootView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showMainApp: Bool = false
 

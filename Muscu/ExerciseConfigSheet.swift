@@ -2,7 +2,8 @@
 //  ExerciseConfigSheet.swift
 //  Muscu
 //
-//  Configuration d’un SessionExercise pour une séance (sets, reps, charge, repos).
+//  Rôle : Configuration d'un nouveau SessionExercise (séries, reps, repos, charge) avant ajout à une SessionRecipe.
+//  Utilisé par : DayEditorView (sheet après sélection d'un ExerciseMaster dans ExercisePickerView).
 //
 
 import SwiftUI

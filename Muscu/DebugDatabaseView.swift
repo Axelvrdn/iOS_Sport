@@ -2,7 +2,8 @@
 //  DebugDatabaseView.swift
 //  Muscu
 //
-//  Vue de diagnostic temporaire : données brutes SwiftData (UserProfile, TrainingProgram, semaines/jours).
+//  Rôle : Vue de diagnostic SwiftData (liste UserProfile, TrainingProgram, audit semaines/jours, bouton « Assigner au Profil »).
+//  Utilisé par : WorkoutView (sheet via bouton coccinelle).
 //
 
 import SwiftUI
