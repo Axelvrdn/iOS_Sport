@@ -197,6 +197,7 @@ final class AIModelDownloader: NSObject {
         totalBytesWritten = 0
         totalBytesExpected = 0
 
+        // URLSession suit les redirections par défaut ; pas de delegate qui les bloque.
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 3600
@@ -243,22 +244,31 @@ extension AIModelDownloader: URLSessionDownloadDelegate {
         guard currentFileIndex < filesToDownload.count else { return }
         let fileName = filesToDownload[currentFileIndex]
 
-        // Validation du MIME type pour éviter d'enregistrer des pages HTML d'erreur.
+        // Validation du MIME type : n'accepter que application/json ou application/octet-stream
+        // pour éviter d'enregistrer des pages HTML d'erreur à la place des fichiers.
         if let httpResponse = downloadTask.response as? HTTPURLResponse {
-            let mime = httpResponse.mimeType ?? ""
+            let mime = (httpResponse.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";").first.map(String.init) ?? httpResponse.mimeType ?? "").trimmingCharacters(in: .whitespaces)
             if fileName.hasSuffix(".json") {
                 let allowedJSON = ["application/json", "text/json"]
                 if !allowedJSON.contains(mime) {
-                    print("[AIModelDownloader] MIME invalide pour \(fileName): \(mime)")
+                    print("[AIModelDownloader] MIME invalide pour \(fileName): '\(mime)' (attendu: application/json)")
                     errorMessage = "Le téléchargement de \(fileName) semble invalide (type: \(mime))."
                     try? FileManager.default.removeItem(at: location)
                     finishDownload(success: false)
                     return
                 }
             } else {
-                // Fichiers binaires : on rejette clairement le HTML.
-                if mime == "text/html" {
-                    print("[AIModelDownloader] MIME HTML inattendu pour \(fileName): \(mime)")
+                // Fichiers binaires (.safetensors) : uniquement application/octet-stream (ou type vide si non envoyé).
+                let allowedBinary = ["application/octet-stream", "application/x-safetensors"]
+                if !mime.isEmpty && !allowedBinary.contains(mime) {
+                    print("[AIModelDownloader] MIME invalide pour \(fileName): '\(mime)' (attendu: application/octet-stream)")
+                    errorMessage = "Le téléchargement de \(fileName) semble invalide (type: \(mime))."
+                    try? FileManager.default.removeItem(at: location)
+                    finishDownload(success: false)
+                    return
+                }
+                if mime == "text/html" || mime == "application/json" {
+                    print("[AIModelDownloader] Réponse non binaire pour \(fileName): \(mime)")
                     errorMessage = "Le téléchargement de \(fileName) semble invalide."
                     try? FileManager.default.removeItem(at: location)
                     finishDownload(success: false)
