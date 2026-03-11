@@ -296,9 +296,10 @@ final class AICoachViewModel {
         let profileFetch = FetchDescriptor<UserProfile>()
         let profiles = (try? context.fetch(profileFetch)) ?? []
         if let profile = profiles.first {
+            let plannedSessionsPerWeek = profile.disciplineSchedule.values.reduce(0) { $0 + $1.count }
             sections.append("""
             Profil: âge \(profile.age), poids \(profile.weight) kg, objectif physique \(profile.physiqueGoal.rawValue), \
-            \(profile.sessionsPerWeek) séances/semaine, dernière séance \(formatDate(profile.lastWorkoutDate)), \
+            \(plannedSessionsPerWeek) séances planifiées/semaine, dernière séance \(formatDate(profile.lastWorkoutDate)), \
             durée dernière séance \(profile.lastWorkoutDurationSeconds)s, volume \(profile.lastWorkoutTotalVolumeKg) kg. \
             Niveau strictesse \(String(format: "%.2f", profile.strictnessLevel)). Zones sensibles: \(profile.injuredZonesJSON).
             """)

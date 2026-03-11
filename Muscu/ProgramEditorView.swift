@@ -316,14 +316,24 @@ private struct DayBubbleView: View {
     }
 
     private var bubbleColor: Color {
-        if day.isRestDay { return Color.gray.opacity(0.25) }
+        // Repos total : gris clair
+        if day.isRestDay {
+            return Color.gray.opacity(0.25)
+        }
         switch day.focusCategory {
-        case .lowerBody, .legs: return accentColor.opacity(0.3)
-        case .upperBody, .push, .pull: return Color.blue.opacity(0.3)
-        case .plyometrics: return Color.orange.opacity(0.3)
-        case .cardio: return Color.purple.opacity(0.3)
-        case .hybrid: return Color.teal.opacity(0.3)
-        case .none: return Color.yellow.opacity(0.2)
+        case .lowerBody, .legs:
+            return accentColor.opacity(0.3)
+        case .upperBody, .push, .pull:
+            return Color.blue.opacity(0.3)
+        case .plyometrics:
+            return Color.orange.opacity(0.3)
+        case .cardio:
+            return Color.purple.opacity(0.3)
+        case .hybrid:
+            // Récupération active (Bien‑être / Mobilité) : vert d'eau
+            return Color.teal.opacity(0.3)
+        case .none:
+            return Color.yellow.opacity(0.2)
         }
     }
 }

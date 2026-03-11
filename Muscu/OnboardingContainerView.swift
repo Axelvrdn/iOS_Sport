@@ -188,9 +188,6 @@ final class OnboardingState {
 
     // Étape style d’entraînement
     var trainingStyleKind: TrainingStyleKind = .bodybuilding
-    var sessionsPerWeek: Int = 3
-    var minutesPerSession: Int = 60
-    var selectedDays: Set<Int> = [0, 2, 4] // L, M, V par défaut
 
     // Étape 3 – Historique & contexte
     var sportsHistoryLevel: SportsHistoryLevel = .intermediate
@@ -202,6 +199,8 @@ final class OnboardingState {
 
     // Profil multi-sport (sélectionnée lors de l'onboarding ou plus tard dans le profil).
     var selectedDisciplines: Set<Discipline> = [.strength]
+    /// Planning par discipline saisi dans l’Intro (DayOfWeek par Discipline).
+    var disciplineSchedule: [Discipline: Set<DayOfWeek>] = [:]
 
     func nextStep() {
         guard currentStep < Self.totalSteps else { return }

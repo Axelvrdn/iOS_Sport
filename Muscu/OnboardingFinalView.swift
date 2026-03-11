@@ -55,8 +55,13 @@ struct OnboardingFinalView: View {
                 .font(.headline)
             summaryRow("Objectif", state.physiqueGoal.displayName)
             summaryRow("Style", state.trainingStyleKind.displayName)
-            summaryRow("Séances / semaine", "\(state.sessionsPerWeek)")
-            summaryRow("Durée", "\(state.minutesPerSession) min")
+            if !state.selectedDisciplines.isEmpty {
+                let names = state.selectedDisciplines.map { "\($0.emoji) \($0.displayName)" }.joined(separator: " · ")
+                summaryRow("Disciplines", names)
+            }
+            if !state.disciplineSchedule.isEmpty {
+                summaryRow("Planning", "Jours attribués par discipline")
+            }
             summaryRow("Niveau", sportsHistoryDisplay)
             if !state.injuredZones.isEmpty {
                 summaryRow("Zones sensibles", "\(state.injuredZones.count)")
@@ -134,9 +139,6 @@ struct OnboardingFinalView: View {
         profile.weightGoal = state.targetWeight
         profile.physiqueGoal = state.physiqueGoal
         profile.trainingStyle = state.trainingStyleKind.toTrainingStyle(specificSport: .volley)
-        profile.sessionsPerWeek = state.sessionsPerWeek
-        profile.hoursPerSession = Double(state.minutesPerSession) / 60.0
-        profile.availableDays = state.selectedDays.sorted()
         profile.sportsHistory = state.sportsHistoryLevel.rawValue
         profile.currentOtherSports = state.concurrentSport
         profile.injurySensitivity = state.injurySusceptibility
@@ -144,6 +146,7 @@ struct OnboardingFinalView: View {
         // Mapping profil athlétique multi-sport
         profile.selectedDisciplines = state.selectedDisciplines
         profile.hasGymAccess = (state.environmentKind == .gym)
+        profile.disciplineSchedule = state.disciplineSchedule
 
         do {
             try modelContext.save()

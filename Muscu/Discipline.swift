@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum Discipline: String, Codable, CaseIterable, Identifiable {
+enum Discipline: String, Codable, CaseIterable, Identifiable, Hashable {
     case combat        // Combat Sports
     case endurance     // Endurance & Cardio
     case racket        // Sports de Raquette

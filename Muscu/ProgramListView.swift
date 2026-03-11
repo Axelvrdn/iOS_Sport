@@ -44,6 +44,8 @@ struct ProgramListView: View {
     private var filteredPrograms: [TrainingProgram] {
         let wanted = categories(for: userDisciplines)
         return programs.filter { program in
+            // Ne pas afficher les gabarits (templates) dans "Mes Programmes".
+            guard !program.isTemplate else { return false }
             let cats = Set(program.sportCategories)
             // Universel : contient .general → toujours visible
             if cats.contains(.general) { return true }

@@ -58,7 +58,9 @@ final class DataController {
         let program = TrainingProgram(
             name: "Programme Athlétique Volley",
             programDescription: "8 semaines – Haut du corps, bas du corps, pliométrie et détente. Semaines impaires = Dimanche A, paires = Dimanche B.",
-            sportCategoriesString: "volley,general"
+            sportCategoriesString: "volley,general",
+            validationRules: nil,
+            isTemplate: true
         )
         context.insert(program)
 
@@ -257,7 +259,9 @@ final class DataController {
             let program = TrainingProgram(
                 name: def.name,
                 programDescription: def.description,
-                sportCategoriesString: def.sportCategories.map(\.rawValue).joined(separator: ",")
+                sportCategoriesString: def.sportCategories.map(\.rawValue).joined(separator: ","),
+                validationRules: nil,
+                isTemplate: true
             )
             context.insert(program)
 
@@ -309,8 +313,79 @@ final class DataController {
 
         if existingPrograms.isEmpty {
             await seedHybridPrograms(context: context)
+            // Une fois les templates disponibles, génère un programme personnalisé à partir du profil et du planning.
+            generatePersonalizedProgram(context: context)
         } else {
             print("[DataController] seedInitialData: programs already exist (\(existingPrograms.count)), skipping seeding.")
+        }
+    }
+
+    /// Génère le programme personnalisé (non-template) à partir des gabarits et du planning par discipline.
+    /// - Parameters:
+    ///   - context: Contexte SwiftData courant.
+    ///   - force: Si true, supprime le programme actif existant avant de régénérer.
+    static func generatePersonalizedProgram(context: ModelContext, force: Bool = false) {
+        print("[DataController] generatePersonalizedProgram called (force=\(force))")
+
+        let profiles = (try? context.fetch(FetchDescriptor<UserProfile>())) ?? []
+        guard let profile = profiles.first else {
+            print("[DataController] generatePersonalizedProgram: aucun profil trouvé.")
+            return
+        }
+
+        // Si un programme actif existe déjà, on peut soit le conserver, soit le recréer en mode "force".
+        if let existingActive = profile.activeTrainingProgram {
+            if force {
+                print("[DataController] generatePersonalizedProgram: suppression de l'ancien programme actif avant régénération.")
+                profile.activeTrainingProgram = nil
+                context.delete(existingActive)
+            } else {
+                print("[DataController] generatePersonalizedProgram: activeTrainingProgram déjà défini, skip.")
+                return
+            }
+        }
+
+        let templates = availableProgramTemplates(for: profile, context: context)
+        let disciplines = profile.selectedDisciplines
+        guard !disciplines.isEmpty else {
+            print("[DataController] generatePersonalizedProgram: aucune discipline sélectionnée.")
+            return
+        }
+
+        let programName = "Programme Hybride Personnel"
+        let description = "Plan généré automatiquement à partir de tes disciplines et de ton planning."
+        let allCategories = sportCategories(for: disciplines)
+
+        let activeProgram = TrainingProgram(
+            name: programName,
+            programDescription: description,
+            sportCategoriesString: allCategories.map(\.rawValue).joined(separator: ","),
+            validationRules: nil,
+            isTemplate: false
+        )
+        context.insert(activeProgram)
+
+        let week = TrainingWeek(weekNumber: 1)
+        week.program = activeProgram
+        context.insert(week)
+        activeProgram.weeks.append(week)
+
+        // 1. Sessions par discipline (Muscu + autres).
+        buildDisciplineDays(
+            for: profile,
+            in: activeProgram,
+            week: week,
+            templates: templates,
+            context: context
+        )
+
+        profile.activeTrainingProgram = activeProgram
+
+        do {
+            try context.save()
+            print("[DataController] generatePersonalizedProgram: programme actif généré avec succès.")
+        } catch {
+            print("[DataController] generatePersonalizedProgram error: \(error)")
         }
     }
 
@@ -486,11 +561,375 @@ final class DataController {
         return program
     }
 
+    // MARK: - Program templates filtering
+
+    /// Retourne les programmes gabarits pertinents pour le profil donné (discipline + accès salle).
+    static func availableProgramTemplates(for profile: UserProfile, context: ModelContext) -> [TrainingProgram] {
+        let fetch = FetchDescriptor<TrainingProgram>()
+        let all = (try? context.fetch(fetch)) ?? []
+        let templates = all.filter { $0.isTemplate }
+        let wantedCategories = sportCategories(for: profile.selectedDisciplines)
+
+        return templates.filter { program in
+            let cats = Set(program.sportCategories)
+            // Programmes universels : toujours visibles.
+            let disciplineMatch = cats.contains(.general) || !cats.isDisjoint(with: wantedCategories)
+            guard disciplineMatch else { return false }
+
+            // Filtre matériel : si pas de salle, on exclut les variantes "Gym Edition".
+            if profile.hasGymAccess {
+                return true
+            } else {
+                let lowerName = program.name.lowercased()
+                if lowerName.contains("gym") && !lowerName.contains("no gym") {
+                    return false
+                }
+                return true
+            }
+        }
+    }
+
     /// Poids suggéré pour un exercice quand la charge est en % du 1RM (loadStrategy == .percentageOfOneRM).
     /// Utilise ExerciseMaster.estimatedOneRM et le loadValue du SessionExercise (ex: 80 = 80%).
     static func suggestedWeight(for master: ExerciseMaster?, percentage: Double) -> Double? {
         guard let master = master, master.estimatedOneRM > 0, percentage > 0 else { return nil }
         return OneRMHelper.weightForPercentage(of: master.estimatedOneRM, percentage: percentage)
+    }
+}
+
+/// Mapping Disciplines → catégories sportives associées (partagé avec ProgramListView).
+private func sportCategories(for disciplines: Set<Discipline>) -> Set<SportCategory> {
+    disciplines.reduce(into: Set<SportCategory>()) { acc, d in
+        switch d {
+        case .combat:
+            acc.insert(.boxing)
+        case .endurance:
+            acc.insert(.running)
+        case .racket:
+            acc.insert(.general)
+        case .outdoor:
+            acc.insert(.general)
+        case .wellness:
+            acc.insert(.general)
+        case .strength:
+            acc.insert(.bodybuilding)
+        case .street:
+            acc.insert(.bodybuilding)
+        case .ballSports:
+            acc.insert(.basket); acc.insert(.volley)
+        }
+    }
+}
+
+// MARK: - Programme personnalisé (construction des jours / recettes)
+
+/// Construit les jours de la semaine (TrainingDay + SessionRecipe) à partir du planning disciplinaire.
+private func buildDisciplineDays(
+    for profile: UserProfile,
+    in program: TrainingProgram,
+    week: TrainingWeek,
+    templates: [TrainingProgram],
+    context: ModelContext
+) {
+    let schedule = profile.disciplineSchedule
+    guard !schedule.isEmpty else { return }
+
+    // Tri des disciplines pour une itération stable.
+    let orderedDisciplines = schedule.keys.sorted { $0.displayName < $1.displayName }
+
+    struct PendingDay {
+        let dayOfWeek: DayOfWeek
+        let title: String
+        let focusCategory: FocusCategory
+        /// Recette source à cloner (templates). Nil pour les jours de musculation générés.
+        let sourceRecipe: SessionRecipe?
+        /// Nom de la recette pour les jours générés (Muscu).
+        let strengthLabel: String?
+    }
+
+    var pendingDays: [PendingDay] = []
+
+    // 1) Discipline Muscu (strength) avec logique Upper/Lower ou PPL.
+    if let strengthDays = schedule[.strength], !strengthDays.isEmpty {
+        let sortedStrengthDays = strengthDays.sorted { $0.rawValue < $1.rawValue }
+        for (idx, dayOfWeek) in sortedStrengthDays.enumerated() {
+            let titlePrefix = frenchWeekdayName(for: dayOfWeek)
+            let (focus, label) = strengthFocusLabel(forDayIndex: idx, totalDays: sortedStrengthDays.count)
+            let dayTitle = "\(titlePrefix) - \(label)"
+
+            pendingDays.append(
+                PendingDay(
+                    dayOfWeek: dayOfWeek,
+                    title: dayTitle,
+                    focusCategory: focus,
+                    sourceRecipe: nil,
+                    strengthLabel: label
+                )
+            )
+        }
+    }
+
+    // 2) Autres disciplines : clonage depuis un template si disponible.
+    for discipline in orderedDisciplines where discipline != .strength {
+        guard let days = schedule[discipline], !days.isEmpty else { continue }
+        guard let template = templateProgram(for: discipline, in: templates) else { continue }
+
+        let nonRestDays = (template.weeks.first?.days ?? [])
+            .sorted { $0.dayIndex < $1.dayIndex }
+            .filter { !$0.isRestDay }
+        guard !nonRestDays.isEmpty else { continue }
+
+        let sortedDays = days.sorted { $0.rawValue < $1.rawValue }
+
+        for (offset, dayOfWeek) in sortedDays.enumerated() {
+            let sourceDay = nonRestDays[offset % nonRestDays.count]
+            let sourceTitle = sourceDay.title.isEmpty ? discipline.displayName : sourceDay.title
+            let weekdayName = frenchWeekdayName(for: dayOfWeek)
+            let sessionTitle = "\(weekdayName) - \(sourceTitle)"
+
+            let pending = PendingDay(
+                dayOfWeek: dayOfWeek,
+                title: sessionTitle,
+                focusCategory: sourceDay.focusCategory,
+                sourceRecipe: sourceDay.sessionRecipe,
+                strengthLabel: nil
+            )
+            pendingDays.append(pending)
+        }
+    }
+
+    // Regroupe les PendingDay par jour de semaine pour un accès O(1).
+    let pendingByDay = Dictionary(grouping: pendingDays, by: { $0.dayOfWeek })
+
+    // Template "Bien‑être et Mobilité" pour les jours de récupération active.
+    let wellnessTemplate = templateProgram(for: .wellness, in: templates)
+    let wellnessNonRestDays: [TrainingDay] = (wellnessTemplate?.weeks.first?.days ?? [])
+        .sorted { $0.dayIndex < $1.dayIndex }
+        .filter { !$0.isRestDay && $0.sessionRecipe != nil }
+
+    var activeRecoveryUsed = 0
+    let maxActiveRecovery = 2
+
+    // 3) Boucle sur les 7 jours de la semaine (Lundi…Dimanche), dayIndex = 0…6.
+    for dayOfWeek in DayOfWeek.allCases {
+        let dayIndex = dayOfWeek.rawValue
+
+        if let pending = pendingByDay[dayOfWeek]?.first {
+            // Jour planifié (Muscu / autre discipline).
+            let day = TrainingDay(
+                dayIndex: dayIndex,
+                isRestDay: false,
+                focusCategory: pending.focusCategory,
+                title: pending.title
+            )
+            day.week = week
+            context.insert(day)
+            week.days.append(day)
+
+            if let sourceRecipe = pending.sourceRecipe {
+                // Clonage simple de la recette template.
+                let cloned = cloneSessionRecipe(sourceRecipe, for: day, context: context)
+                day.sessionRecipe = cloned
+            } else if let strengthLabel = pending.strengthLabel {
+                // Jour de musculation généré (Upper/Lower/PPL/Full Body).
+                let bodyFocus: BodyFocus
+                switch pending.focusCategory {
+                case .upperBody: bodyFocus = .upper
+                case .legs: bodyFocus = .lower
+                case .push: bodyFocus = .upper
+                case .pull: bodyFocus = .upper
+                default: bodyFocus = .fullBody
+                }
+                let recipe = SessionRecipe(
+                    name: strengthLabel,
+                    goal: .strength,
+                    bodyFocus: bodyFocus,
+                    sportCategoriesString: "bodybuilding"
+                )
+                recipe.day = day
+                day.sessionRecipe = recipe
+                context.insert(recipe)
+            }
+        } else {
+            // Jour non planifié : Repos total ou Récupération active (Bien‑être & Mobilité).
+            let weekdayName = frenchWeekdayName(for: dayOfWeek)
+
+            var isRestDay = true
+            var focus: FocusCategory = .none
+            var title = "\(weekdayName) - Repos total"
+            var recipeToClone: SessionRecipe?
+
+            if activeRecoveryUsed < maxActiveRecovery,
+               let sourceDay = wellnessNonRestDays.indices.contains(activeRecoveryUsed) ? wellnessNonRestDays[activeRecoveryUsed] : nil,
+               let sourceRecipe = sourceDay.sessionRecipe {
+                // Récupération active : on clone une journée du template Bien‑être & Mobilité.
+                isRestDay = false
+                focus = .hybrid
+                title = "\(weekdayName) - Récupération active"
+                recipeToClone = sourceRecipe
+                activeRecoveryUsed += 1
+            }
+
+            let day = TrainingDay(
+                dayIndex: dayIndex,
+                isRestDay: isRestDay,
+                focusCategory: focus,
+                title: title
+            )
+            day.week = week
+            context.insert(day)
+            week.days.append(day)
+
+            if let sourceRecipe = recipeToClone {
+                let cloned = cloneSessionRecipe(sourceRecipe, for: day, context: context)
+                day.sessionRecipe = cloned
+            }
+        }
+    }
+
+    // 4) Optimisation hybride : injection de pliométrie si Muscu + sport explosif.
+    let hasStrength = schedule[.strength]?.isEmpty == false
+    let hasExplosiveSport = schedule[.combat]?.isEmpty == false || schedule[.ballSports]?.isEmpty == false
+    if hasStrength && hasExplosiveSport {
+        injectPlyometricsIntoStrengthDays(in: week, context: context)
+    }
+}
+
+/// Détermine le focus Upper/Lower ou PPL pour les jours de musculation.
+private func strengthFocusLabel(forDayIndex index: Int, totalDays: Int) -> (FocusCategory, String) {
+    if totalDays == 1 {
+        return (.hybrid, "Full Body Force")
+    } else if totalDays == 2 {
+        return index == 0 ? (.upperBody, "Upper Body Strength") : (.legs, "Lower Body Strength")
+    } else {
+        // 3 jours ou plus → PPL / Full Body mix
+        switch index % 3 {
+        case 0: return (.push, "Push (Pecs/Épaules/Triceps)")
+        case 1: return (.pull, "Pull (Dos/Biceps)")
+        default: return (.legs, "Legs (Jambes/Fessiers)")
+        }
+    }
+}
+
+/// Retourne le nom français du jour (ex: "Lundi").
+private func frenchWeekdayName(for day: DayOfWeek) -> String {
+    switch day {
+    case .monday: return "Lundi"
+    case .tuesday: return "Mardi"
+    case .wednesday: return "Mercredi"
+    case .thursday: return "Jeudi"
+    case .friday: return "Vendredi"
+    case .saturday: return "Samedi"
+    case .sunday: return "Dimanche"
+    }
+}
+
+/// Sélectionne un programme template pertinent pour une discipline donnée.
+private func templateProgram(for discipline: Discipline, in templates: [TrainingProgram]) -> TrainingProgram? {
+    // Filtre par catégorie sportive associée.
+    let wantedCats = sportCategories(for: [discipline])
+    let filtered = templates.filter { program in
+        let cats = Set(program.sportCategories)
+        return !cats.isDisjoint(with: wantedCats) || cats.contains(.general)
+    }
+
+    if filtered.isEmpty { return nil }
+
+    // Tentative de match par nom sémantique.
+    let lowerNameMatches: (TrainingProgram) -> Bool = { program in
+        let name = program.name.lowercased()
+        switch discipline {
+        case .combat: return name.contains("combat") || name.contains("fighter") || name.contains("boxe")
+        case .endurance: return name.contains("endurance") || name.contains("cardio")
+        case .racket: return name.contains("raquette")
+        case .outdoor: return name.contains("outdoor") || name.contains("montagne")
+        case .wellness: return name.contains("bien") || name.contains("mobilité") || name.contains("yoga")
+        case .strength: return name.contains("fighter performance") || name.contains("force")
+        case .street: return name.contains("street")
+        case .ballSports: return name.contains("basket") || name.contains("volley") || name.contains("ballon")
+        }
+    }
+
+    if let match = filtered.first(where: lowerNameMatches) {
+        return match
+    }
+    return filtered.first
+}
+
+/// Clone un SessionRecipe (et ses SessionExercise) sur un nouveau TrainingDay.
+private func cloneSessionRecipe(_ source: SessionRecipe, for day: TrainingDay, context: ModelContext) -> SessionRecipe {
+    let cloned = SessionRecipe(
+        name: source.name,
+        goal: source.goal,
+        bodyFocus: source.bodyFocus,
+        sportCategoriesString: source.sportCategoriesString
+    )
+    cloned.day = day
+    context.insert(cloned)
+
+    for se in source.exercises {
+        let clonedSE = SessionExercise(
+            sets: se.sets,
+            reps: se.reps,
+            restTime: se.restTime,
+            loadStrategy: se.loadStrategy,
+            loadValue: se.loadValue
+        )
+        clonedSE.exercise = se.exercise
+        clonedSE.session = cloned
+        context.insert(clonedSE)
+        cloned.exercises.append(clonedSE)
+    }
+
+    return cloned
+}
+
+/// Ajoute des blocs de pliométrie dans les jours Muscu quand l'utilisateur combine Force + Sport explosif.
+private func injectPlyometricsIntoStrengthDays(in week: TrainingWeek, context: ModelContext) {
+    let days = week.days.filter { !$0.isRestDay && ($0.focusCategory == .upperBody || $0.focusCategory == .legs || $0.focusCategory == .hybrid || $0.focusCategory == .push || $0.focusCategory == .pull) }
+    guard !days.isEmpty else { return }
+
+    let masters = (try? context.fetch(FetchDescriptor<ExerciseMaster>())) ?? []
+    let byName = Dictionary(uniqueKeysWithValues: masters.map { ($0.name, $0) })
+
+    // Liste courte d’exercices pliométriques à forte synergie athlétique.
+    let plyoCandidates = [
+        "Saut vertical pur (CMJ max)",
+        "Depth jump",
+        "Sprint 30m",
+        "Skater jump"
+    ]
+
+    let plyoMasters: [ExerciseMaster] = plyoCandidates.compactMap { byName[$0] }
+    guard !plyoMasters.isEmpty else { return }
+
+    for (idx, day) in days.enumerated() {
+        if day.sessionRecipe == nil {
+            let recipe = SessionRecipe(
+                name: day.title,
+                goal: .volume,
+                bodyFocus: .fullBody,
+                sportCategoriesString: "bodybuilding"
+            )
+            recipe.day = day
+            day.sessionRecipe = recipe
+            context.insert(recipe)
+        }
+        guard let recipe = day.sessionRecipe else { continue }
+
+        // Ajoute 1 exercice pliométrique différent par jour (cycle).
+        let master = plyoMasters[idx % plyoMasters.count]
+        let se = SessionExercise(
+            sets: 3,
+            reps: "5",
+            restTime: 90,
+            loadStrategy: .fixedWeight,
+            loadValue: 0
+        )
+        se.exercise = master
+        se.session = recipe
+        context.insert(se)
+        recipe.exercises.append(se)
     }
 }
 

@@ -173,10 +173,13 @@ struct WorkoutView: View {
         return "\(session.programName.isEmpty ? "Séance" : session.programName) • \(formatter.string(from: session.date))"
     }
 
-    private var displayedPrograms: [TrainingProgram] { programs }
+    /// Programmes visibles pour l'utilisateur (hors templates).
+    private var displayedPrograms: [TrainingProgram] {
+        programs.filter { !$0.isTemplate }
+    }
 
     private var displayedActiveProgram: TrainingProgram? {
-        userProfile?.activeTrainingProgram ?? activeProgram ?? programs.first
+        userProfile?.activeTrainingProgram ?? activeProgram ?? displayedPrograms.first
     }
 
     /// Log du jour pour l’évaluation (Pas, Sommeil).
@@ -282,7 +285,7 @@ struct WorkoutView: View {
             .onAppear {
                 if let profileProgram = userProfile?.activeTrainingProgram {
                     activeProgram = profileProgram
-                } else if activeProgram == nil, let firstProgram = programs.first {
+                } else if activeProgram == nil, let firstProgram = displayedPrograms.first {
                     activeProgram = firstProgram
                 }
             }
@@ -292,7 +295,7 @@ struct WorkoutView: View {
             .onChange(of: programs.count) { _, newCount in
                 if let profileProgram = userProfile?.activeTrainingProgram {
                     activeProgram = profileProgram
-                } else if activeProgram == nil, newCount > 0, let firstProgram = programs.first {
+                } else if activeProgram == nil, newCount > 0, let firstProgram = displayedPrograms.first {
                     activeProgram = firstProgram
                 }
             }
@@ -443,7 +446,7 @@ struct WorkoutView: View {
                 }
                 .buttonStyle(EliteScaleButtonStyle())
             } else {
-                heroEmptyCard
+                heroNoProgramCard
             }
         }
     }
@@ -563,16 +566,17 @@ struct WorkoutView: View {
         .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
     }
 
-    private var heroEmptyCard: some View {
+    /// Message affiché quand aucun programme personnalisé n'est encore actif.
+    private var heroNoProgramCard: some View {
         HStack(spacing: 16) {
             Image(systemName: "figure.run")
                 .font(.system(size: 40, weight: .ultraLight))
                 .foregroundStyle(Color.secondary.opacity(0.6))
             VStack(alignment: .leading, spacing: 4) {
-                Text("Aucune séance suggérée")
+                Text("Aucun programme actif")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.primary)
-                Text("Termine ta première séance pour démarrer la rotation.")
+                Text("Configure ton planning dans ton profil pour générer ton programme.")
                     .font(.footnote)
                     .foregroundStyle(Color.secondary)
             }

@@ -4,11 +4,35 @@ import SwiftUI
 struct IntroView: View {
     @Bindable var state: OnboardingState
     @State private var warningText: String?
+    @State private var currentDisciplineIndex: Int = 0
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 14),
         GridItem(.flexible(), spacing: 14)
     ]
+
+    private let dayOrder: [(day: DayOfWeek, short: String, label: String)] = [
+        (.monday, "L", "Lundi"),
+        (.tuesday, "M", "Mardi"),
+        (.wednesday, "M", "Mercredi"),
+        (.thursday, "J", "Jeudi"),
+        (.friday, "V", "Vendredi"),
+        (.saturday, "S", "Samedi"),
+        (.sunday, "D", "Dimanche")
+    ]
+
+    private var sortedDisciplines: [Discipline] {
+        state.selectedDisciplines.sorted { $0.displayName < $1.displayName }
+    }
+
+    private var planningIsComplete: Bool {
+        let discs = sortedDisciplines
+        guard !discs.isEmpty else { return false }
+        return discs.allSatisfy { d in
+            guard let days = state.disciplineSchedule[d] else { return false }
+            return !days.isEmpty
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -22,6 +46,7 @@ struct IntroView: View {
                 header
                 disciplinesGrid
                 environmentSegment
+                planningSection
                 if let warning = warningText {
                     Text(warning)
                         .font(.caption)
@@ -31,7 +56,9 @@ struct IntroView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
                 Spacer()
-                generateButton
+                if planningIsComplete {
+                    generateButton
+                }
             }
             .padding(.horizontal, 24)
             .padding(.top, 32)
@@ -44,7 +71,7 @@ struct IntroView: View {
             Text("Ton profil d'athlète hybride")
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
-            Text("Choisis jusqu'à 3 disciplines. Le coach adaptera automatiquement les programmes, la fatigue et les semaines de deload.")
+            Text("Choisis jusqu'à 3 disciplines, ton environnement, puis planifie tes jours par pratique.")
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
@@ -105,12 +132,16 @@ struct IntroView: View {
         if state.selectedDisciplines.contains(d) {
             state.selectedDisciplines.remove(d)
             warningText = nil
+            // Nettoie le planning associé si on supprime une discipline.
+            state.disciplineSchedule[d] = nil
         } else if state.selectedDisciplines.count < 3 {
             state.selectedDisciplines.insert(d)
             warningText = nil
         } else {
             warningText = "Le focus est la clé de la performance. Choisis tes 3 priorités."
         }
+        // Recalibre l’index courant si nécessaire.
+        currentDisciplineIndex = min(currentDisciplineIndex, max(0, sortedDisciplines.count - 1))
     }
 
     private var environmentSegment: some View {
@@ -127,6 +158,117 @@ struct IntroView: View {
                         subtitle: "Machines, barres, charges.\nProfil Gym Edition.")
             }
         }
+    }
+
+    // MARK: - Planning par discipline
+
+    private var planningSection: some View {
+        let discs = sortedDisciplines
+        guard !discs.isEmpty else { return AnyView(EmptyView()) }
+
+        let currentIndex = min(currentDisciplineIndex, max(0, discs.count - 1))
+        let currentDiscipline = discs[currentIndex]
+
+        // Jours déjà occupés par les autres disciplines (anti‑doublon).
+        let occupiedByOthers: Set<DayOfWeek> = state.disciplineSchedule
+            .filter { key, _ in key != currentDiscipline }
+            .values
+            .reduce(into: Set<DayOfWeek>()) { acc, set in acc.formUnion(set) }
+
+        return AnyView(
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Quand pratiques-tu : \(currentDiscipline.emoji) \(currentDiscipline.displayName) ?")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Spacer()
+                }
+
+                HStack(spacing: 8) {
+                    ForEach(dayOrder, id: \.day) { info in
+                        dayButton(for: info.day,
+                                  short: info.short,
+                                  label: info.label,
+                                  discipline: currentDiscipline,
+                                  occupiedByOthers: occupiedByOthers)
+                    }
+                }
+
+                if discs.count > 1 {
+                    HStack {
+                        Text("Discipline \(currentIndex + 1) sur \(discs.count)")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                        Spacer()
+                        Button {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                currentDisciplineIndex = max(0, currentDisciplineIndex - 1)
+                            }
+                        } label: {
+                            Image(systemName: "chevron.left")
+                        }
+                        .foregroundStyle(.white.opacity(currentIndex > 0 ? 1 : 0.3))
+                        .disabled(currentIndex == 0)
+
+                        Button {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                currentDisciplineIndex = min(discs.count - 1, currentDisciplineIndex + 1)
+                            }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                        }
+                        .foregroundStyle(.white.opacity(currentIndex < discs.count - 1 ? 1 : 0.3))
+                        .disabled(currentIndex >= discs.count - 1)
+                    }
+                }
+            }
+        )
+    }
+
+    private func dayButton(
+        for day: DayOfWeek,
+        short: String,
+        label: String,
+        discipline: Discipline,
+        occupiedByOthers: Set<DayOfWeek>
+    ) -> some View {
+        let isDisabled = occupiedByOthers.contains(day)
+        let selectedSet = state.disciplineSchedule[discipline] ?? []
+        let isSelected = selectedSet.contains(day)
+
+        return Button {
+            guard !isDisabled else { return }
+            var updated = selectedSet
+            if updated.contains(day) {
+                updated.remove(day)
+            } else {
+                updated.insert(day)
+            }
+            state.disciplineSchedule[discipline] = updated
+        } label: {
+            VStack(spacing: 4) {
+                Text(short)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                Circle()
+                    .fill(isDisabled ? Color.white.opacity(0.1) : (isSelected ? Color.accentColor : Color.clear))
+                    .frame(width: 26, height: 26)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(
+                                isDisabled ? Color.white.opacity(0.15) :
+                                    (isSelected ? Color.accentColor : Color.white.opacity(0.4)),
+                                lineWidth: isSelected ? 2 : 1
+                            )
+                    )
+            }
+            .foregroundStyle(isDisabled ? Color.white.opacity(0.25) : Color.white)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityLabel(Text(label))
     }
 
     private func envTile(kind: EnvironmentKind, title: String, subtitle: String) -> some View {
@@ -167,19 +309,19 @@ struct IntroView: View {
             }
         } label: {
             HStack {
-                Text("Générer mon plan")
+                Text("Finaliser la planification")
                 Image(systemName: "arrow.right.circle.fill")
             }
             .font(.system(size: 17, weight: .semibold, design: .rounded))
             .foregroundStyle(Color.black)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(state.selectedDisciplines.isEmpty ? Color.gray : Color.accentColor)
+            .background(planningIsComplete ? Color.accentColor : Color.gray)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .shadow(color: state.selectedDisciplines.isEmpty ? .clear : Color.accentColor.opacity(0.6),
                     radius: 16, y: 6)
         }
-        .disabled(state.selectedDisciplines.isEmpty)
+        .disabled(!planningIsComplete)
     }
 }
 

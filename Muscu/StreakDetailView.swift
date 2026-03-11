@@ -15,7 +15,17 @@ struct StreakDetailView: View {
     @Query(sort: \WorkoutHistorySession.date, order: .reverse) private var allSessions: [WorkoutHistorySession]
 
     private var profile: UserProfile? { profiles.first }
-    private var availableDays: [Int] { profile?.availableDays ?? [0, 1, 2, 3, 4, 5, 6] }
+    /// Jours disponibles dérivés du planning par discipline (DayOfWeek) ; fallback = tous les jours.
+    private var availableDays: [Int] {
+        guard let profile else { return [0, 1, 2, 3, 4, 5, 6] }
+        let schedule = profile.disciplineSchedule
+        let indices = schedule.values.reduce(into: Set<Int>()) { acc, set in
+            for day in set {
+                acc.insert(day.rawValue)  // 0 = Lundi, ... 6 = Dimanche
+            }
+        }
+        return indices.isEmpty ? [0, 1, 2, 3, 4, 5, 6] : Array(indices).sorted()
+    }
     private var completedSessions: [WorkoutHistorySession] { allSessions.filter(\.isCompleted) }
 
     private let dayLabels = ["L", "M", "M", "J", "V", "S", "D"]
