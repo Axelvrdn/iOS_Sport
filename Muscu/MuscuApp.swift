@@ -48,7 +48,10 @@ struct RootView: View {
                     .onAppear {
                         // Seeding au premier affichage du contenu principal (après le splash).
                         Task {
+                            // 1) Bibliothèque atomique Volley (ExerciseMaster + Programme Volley).
                             await DataController.createDefaultProgram(context: modelContext)
+                            // 2) Programmes hybrides multi-sports (combat, endurance, raquettes, outdoor, bien‑être).
+                            await DataController.seedHybridPrograms(context: modelContext)
                         }
                     }
             } else {
