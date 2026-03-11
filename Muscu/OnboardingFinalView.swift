@@ -141,11 +141,20 @@ struct OnboardingFinalView: View {
         profile.currentOtherSports = state.concurrentSport
         profile.injurySensitivity = state.injurySusceptibility
         profile.injuredZones = Array(state.injuredZones)
+        // Mapping profil athlétique multi-sport
+        profile.selectedDisciplines = state.selectedDisciplines
+        profile.hasGymAccess = (state.environmentKind == .gym)
 
         do {
             try modelContext.save()
-            withAnimation(.easeInOut(duration: 0.5)) {
-                hasCompletedOnboarding = true
+            // Seed bibliothèque + programmes hybrides dès la fin d'onboarding, puis passage à l'app.
+            Task {
+                await DataController.seedInitialData(context: modelContext)
+                await MainActor.run {
+                    withAnimation(.easeInOut(duration: 0.5)) {
+                        hasCompletedOnboarding = true
+                    }
+                }
             }
         } catch {
             errorMessage = "Erreur : \(error.localizedDescription)"

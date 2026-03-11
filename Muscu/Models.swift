@@ -141,6 +141,20 @@ enum SportCategory: String, Codable, CaseIterable {
     case general
 }
 
+/// Niveau d'impact mécanique (utile pour filtrer en mode "low-power").
+enum ImpactLevel: String, Codable, CaseIterable {
+    case low
+    case medium
+    case high
+}
+
+/// Niveau de technicité / coordination requis.
+enum SkillLevel: String, Codable, CaseIterable {
+    case low
+    case medium
+    case high
+}
+
 // MARK: - BodyPart (zones pour protocole blessure)
 
 enum BodyPart: String, Codable, CaseIterable {
@@ -168,6 +182,7 @@ enum CoachProtocol: Codable, Equatable {
 
 @Model
 final class UserProfile {
+    @Attribute(.unique) var id: UUID
     var age: Int
     var weight: Double
     var physiqueGoal: PhysiqueGoal
@@ -192,6 +207,10 @@ final class UserProfile {
     var lastWorkoutDate: Date
     var lastWorkoutDurationSeconds: Int
     var lastWorkoutTotalVolumeKg: Double
+    /// Disciplines principales choisies pour la personnalisation (stockées "combat,endurance").
+    var selectedDisciplinesRaw: String
+    /// Indique si l'utilisateur a accès à une salle de sport.
+    var hasGymAccess: Bool
 
     @Relationship(deleteRule: .cascade)
     var workoutPrograms: [WorkoutProgram] = []
@@ -212,13 +231,17 @@ final class UserProfile {
         currentOtherSports: String = "",
         weightGoal: Double = 0,
         strictnessLevel: Double = 0.5,
+        id: UUID = UUID(),
         availabilityJSON: String = "{}",
         availableDaysString: String = "0,1,2,3,4,5,6",
         injuredZonesJSON: String = "[]",
         lastWorkoutDate: Date = .distantPast,
         lastWorkoutDurationSeconds: Int = 0,
-        lastWorkoutTotalVolumeKg: Double = 0
+        lastWorkoutTotalVolumeKg: Double = 0,
+        selectedDisciplines: Set<Discipline> = [.strength],
+        hasGymAccess: Bool = true
     ) {
+        self.id = id
         self.age = age
         self.weight = weight
         self.physiqueGoal = physiqueGoal
@@ -237,6 +260,9 @@ final class UserProfile {
         self.lastWorkoutDate = lastWorkoutDate
         self.lastWorkoutDurationSeconds = lastWorkoutDurationSeconds
         self.lastWorkoutTotalVolumeKg = lastWorkoutTotalVolumeKg
+        let limited = Array(selectedDisciplines.prefix(3))
+        self.selectedDisciplinesRaw = limited.map(\.rawValue).joined(separator: ",")
+        self.hasGymAccess = hasGymAccess
     }
 }
 
@@ -264,6 +290,20 @@ extension UserProfile {
             if let data = try? JSONEncoder().encode(newValue), let s = String(data: data, encoding: .utf8) {
                 injuredZonesJSON = s
             }
+        }
+    }
+
+    /// Ensemble limité à 3 disciplines max.
+    var selectedDisciplines: Set<Discipline> {
+        get {
+            let parts = selectedDisciplinesRaw
+                .split(separator: ",")
+                .compactMap { Discipline(rawValue: String($0)) }
+            return Set(parts)
+        }
+        set {
+            let limited = Array(newValue.prefix(3))
+            selectedDisciplinesRaw = limited.map(\.rawValue).joined(separator: ",")
         }
     }
 }
@@ -323,6 +363,12 @@ final class Exercise {
     var equipmentRequired: Bool
     /// Marqueur pour les exercices bonus
     var isBonus: Bool
+    /// Impact mécanique global (low / medium / high).
+    var impactLevelRaw: String
+    /// Niveau de technicité / coordination (low / medium / high).
+    var skillLevelRaw: String
+    /// Exercice de type explosif / pliométrique.
+    var isExplosive: Bool
     /// Phase (mois) du programme à laquelle appartient l’exercice (1 = Phase 1, 2 = Phase 2…)
     var phaseIndex: Int
     /// Index du jour dans la semaine (1 = Day 1, 2 = Day 2, …)
@@ -352,6 +398,9 @@ final class Exercise {
         restSeconds: Int,
         equipmentRequired: Bool,
         isBonus: Bool = false,
+        impactLevel: ImpactLevel = .medium,
+        skillLevel: SkillLevel = .medium,
+        isExplosive: Bool = false,
         phaseIndex: Int,
         dayIndex: Int,
         dayName: String,
@@ -365,12 +414,27 @@ final class Exercise {
         self.restSeconds = restSeconds
         self.equipmentRequired = equipmentRequired
         self.isBonus = isBonus
+        self.impactLevelRaw = impactLevel.rawValue
+        self.skillLevelRaw = skillLevel.rawValue
+        self.isExplosive = isExplosive
         self.phaseIndex = phaseIndex
         self.dayIndex = dayIndex
         self.dayName = dayName
         self.dayFocus = dayFocus
         self.videoUrl = videoUrl
         self.alternativeExercise = alternativeExercise
+    }
+}
+
+extension Exercise {
+    var impactLevel: ImpactLevel {
+        get { ImpactLevel(rawValue: impactLevelRaw) ?? .medium }
+        set { impactLevelRaw = newValue.rawValue }
+    }
+
+    var skillLevel: SkillLevel {
+        get { SkillLevel(rawValue: skillLevelRaw) ?? .medium }
+        set { skillLevelRaw = newValue.rawValue }
     }
 }
 

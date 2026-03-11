@@ -17,10 +17,11 @@ struct ExerciseLibraryView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accentColor) private var accentColor
     @Environment(\.tabBarVisibilityStore) private var tabBarVisibilityStore
-
     @Query(sort: \ExerciseMaster.name) private var allMasters: [ExerciseMaster]
+    @Query private var profiles: [UserProfile]
     @State private var searchText: String = ""
     @State private var selectedMuscleGroup: MuscleGroup? = nil
+    @State private var showAllDisciplines: Bool = false
 
     /// Filtre par recherche texte puis par groupe musculaire (musclesTargeted contient le groupe sélectionné).
     private var filteredMasters: [ExerciseMaster] {
@@ -33,6 +34,17 @@ struct ExerciseLibraryView: View {
                 master.musclesTargeted.contains(group)
             }
         }
+
+        // Filtre par disciplines utilisateur (union des sets), sauf si "Afficher tout" activé.
+        if !showAllDisciplines {
+            let userDisciplines = profiles.first?.selectedDisciplines ?? Set(Discipline.allCases)
+            list = list.filter { master in
+                let disc = disciplines(for: master)
+                return disc.isEmpty
+                    || !disc.intersection(userDisciplines).isEmpty
+            }
+        }
+
         return list
     }
 
@@ -73,6 +85,22 @@ struct ExerciseLibraryView: View {
                         selectedMuscleGroup = group
                     }
                 }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showAllDisciplines.toggle()
+                    }
+                } label: {
+                    Text(showAllDisciplines ? "Filtrer par profil" : "Afficher tout")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 14)
+                        .frame(height: 34)
+                        .background(
+                            Capsule()
+                                .fill(showAllDisciplines ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.04))
+                        )
+                        .foregroundStyle(showAllDisciplines ? accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -148,6 +176,63 @@ struct ExerciseLibraryView: View {
         case .core: return "Gainage"
         case .fullBody: return "Full body"
         }
+    }
+
+    // MARK: - Mapping heuristique ExerciseMaster → Disciplines
+
+    private func disciplines(for master: ExerciseMaster) -> Set<Discipline> {
+        let name = master.name.lowercased()
+
+        // Exercices universels (bodyweight de base, stretch) visibles partout.
+        let universalKeywords = ["pompes", "push-ups", "plank", "planche", "squat", "goblet squat",
+                                 "gainage", "stretch", "étirement", "mobilité", "yoga", "pilates"]
+        if universalKeywords.contains(where: { name.contains($0) }) {
+            return Set(Discipline.allCases)
+        }
+
+        var result = Set<Discipline>()
+
+        // Combat
+        if name.contains("shadow") || name.contains("sparring") || name.contains("sac") ||
+            name.contains("burpees") || name.contains("sprawl") || name.contains("footwork") {
+            result.insert(.combat)
+        }
+
+        // Endurance
+        if name.contains("sprint") || name.contains("sortie") || name.contains("run") ||
+            name.contains("ride") || name.contains("cardio") {
+            result.insert(.endurance)
+        }
+
+        // Strength / Street
+        if master.musclesTargeted.contains(where: { [.chest, .back, .shoulders, .arms, .legs].contains($0) }) ||
+            name.contains("squat") || name.contains("deadlift") || name.contains("curl") ||
+            name.contains("press") || name.contains("row") {
+            result.insert(.strength)
+        }
+
+        // Wellness
+        if name.contains("yoga") || name.contains("pilates") || name.contains("yin") ||
+            name.contains("mobilité") || name.contains("stretch") {
+            result.insert(.wellness)
+        }
+
+        // Outdoor
+        if name.contains("montagnard") || name.contains("côtes") || name.contains("outdoor") {
+            result.insert(.outdoor)
+        }
+
+        // Ball sports
+        if name.contains("volley") || name.contains("match") {
+            result.insert(.ballSports)
+        }
+
+        // Raquette (footwork spécifique)
+        if name.contains("raquette") || name.contains("échelle de rythme") {
+            result.insert(.racket)
+        }
+
+        return result
     }
 }
 

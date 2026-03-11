@@ -8,6 +8,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 // MARK: - Helpers pour l'affichage
 
@@ -48,40 +49,7 @@ extension InjurySensitivity {
     }
 }
 
-enum TrainingStyleKind: String, CaseIterable, Identifiable {
-    case bodybuilding
-    case marathon
-    case hybrid
-    case specificSport
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .bodybuilding: return "Musculation"
-        case .marathon: return "Endurance"
-        case .hybrid: return "Hybride"
-        case .specificSport: return "Sport spécifique"
-        }
-    }
-    var iconName: String {
-        switch self {
-        case .bodybuilding: return "dumbbell.fill"
-        case .marathon: return "figure.run"
-        case .hybrid: return "figure.mixed.cardio"
-        case .specificSport: return "sportscourt.fill"
-        }
-    }
-
-    func toTrainingStyle(specificSport: SpecificSport = .volley) -> TrainingStyle {
-        switch self {
-        case .bodybuilding: return .bodybuilding
-        case .marathon: return .marathon
-        case .hybrid: return .hybrid
-        case .specificSport: return .specificSport(specificSport)
-        }
-    }
-}
+// NOTE: `TrainingStyleKind` a été déplacé dans `TrainingStyleKind.swift` (utilisé par l'onboarding).
 
 // MARK: - Disponibilité hebdo (7 jours) — lié à UserProfile.availableDays
 
@@ -441,8 +409,6 @@ struct ProfileView: View {
     @State private var age: Int = 25
     @State private var weight: Double = 70
     @State private var selectedPhysiqueGoal: PhysiqueGoal = .maintain
-    @State private var trainingStyleKind: TrainingStyleKind = .bodybuilding
-    @State private var specificSport: SpecificSport = .boxing
     @State private var injuryHistory: String = ""
     @State private var injurySensitivity: InjurySensitivity = .medium
     @State private var sessionsPerWeek: Int = 3
@@ -452,6 +418,8 @@ struct ProfileView: View {
     @State private var weightGoal: Double = 75
     @State private var strictnessLevel: Double = 0.5
     @State private var availabilityDays: [Bool] = Array(repeating: true, count: 7)
+    @State private var selectedDisciplines: Set<Discipline> = [.strength]
+    @State private var hasGymAccess: Bool = true
     @State private var didLoadExistingProfile = false
     @State private var saveMessage: String?
 
@@ -608,6 +576,9 @@ struct ProfileView: View {
         }
     }
 
+    // MARK: - Mon Profil Athlétique
+    // (Supprimée) : la sélection des disciplines est désormais intégrée dans "Ma Stratégie".
+
     /// Sauvegarde âge / poids / objectif dans le profil SwiftData (sans tout le formulaire).
     private func persistProfileMetrics() {
         guard let profile = profiles.first else { return }
@@ -663,23 +634,23 @@ struct ProfileView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Style d'entraînement")
+                        Text("Mes Disciplines (max 3)")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
-                        HStack(spacing: 8) {
-                            ForEach(TrainingStyleKind.allCases) { kind in
-                                trainingStyleCapsule(kind)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                            ForEach(Discipline.allCases) { d in
+                                disciplineCapsule(d)
                             }
                         }
-                        if trainingStyleKind == .specificSport {
-                            Picker("Sport", selection: $specificSport) {
-                                ForEach(SpecificSport.allCases, id: \.self) { sport in
-                                    Text(sport.displayName).tag(sport)
-                                }
-                            }
-                            .pickerStyle(.segmented)
+
+                        if disciplineConflictWarning != nil {
+                            Text(disciplineConflictWarning!)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                         }
                     }
+                    Toggle("Accès à une salle de sport", isOn: $hasGymAccess)
+                        .font(.subheadline)
                     HStack(alignment: .top, spacing: 20) {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Séances / semaine")
@@ -747,29 +718,42 @@ struct ProfileView: View {
         .buttonStyle(.plain)
     }
 
-    private func trainingStyleCapsule(_ kind: TrainingStyleKind) -> some View {
-        let isSelected = trainingStyleKind == kind
+    private func disciplineCapsule(_ d: Discipline) -> some View {
+        let isSelected = selectedDisciplines.contains(d)
         return Button {
-            trainingStyleKind = kind
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: kind.iconName)
-                    .font(.caption.weight(.semibold))
-                Text(kind.displayName)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
+            let generator = UIImpactFeedbackGenerator(style: .rigid)
+            generator.prepare()
+            if isSelected {
+                selectedDisciplines.remove(d)
+            } else if selectedDisciplines.count < 3 {
+                selectedDisciplines.insert(d)
+            } else {
+                generator.impactOccurred(intensity: 0.9)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(isSelected ? accentColor.opacity(0.25) : Color.clear)
-            .foregroundStyle(isSelected ? accentColor : Color.primary)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .strokeBorder(isSelected ? accentColor.opacity(0.6) : eliteCardBorder, lineWidth: isSelected ? 1 : 0.5)
-            )
+        } label: {
+            Text("\(d.emoji) \(d.displayName)")
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(isSelected ? accentColor.opacity(0.25) : Color.primary.opacity(colorScheme == .dark ? 0.06 : 0.04))
+                .foregroundStyle(isSelected ? accentColor : Color.primary)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(isSelected ? accentColor.opacity(0.6) : eliteCardBorder, lineWidth: isSelected ? 1 : 0.5)
+                )
         }
         .buttonStyle(.plain)
+    }
+
+    private var disciplineConflictWarning: String? {
+        let d = selectedDisciplines
+        if d.contains(.combat) && d.contains(.ballSports) {
+            return "Attention : Combat + Sports de ballon = forte contrainte épaules/genoux. Prévois préhab & deload."
+        }
+        return nil
     }
 
     /// Jours L M M J V S D : petit cercle, sélectionné = plein accentColor, sinon contour uniquement.
@@ -931,24 +915,8 @@ struct ProfileView: View {
         strictnessLevel = profile.strictnessLevel
         migrateAndLoadAvailableDays(profile)
         availabilityDays = (0..<7).map { profile.availableDays.contains($0) }
-
-        switch profile.trainingStyle ?? .bodybuilding {
-        case .bodybuilding: trainingStyleKind = .bodybuilding
-        case .marathon: trainingStyleKind = .marathon
-        case .hybrid: trainingStyleKind = .hybrid
-        case .specificSport(let sport):
-            trainingStyleKind = .specificSport
-            specificSport = sport
-        }
-    }
-
-    private func buildTrainingStyle() -> TrainingStyle {
-        switch trainingStyleKind {
-        case .bodybuilding: return .bodybuilding
-        case .marathon: return .marathon
-        case .hybrid: return .hybrid
-        case .specificSport: return .specificSport(specificSport)
-        }
+        selectedDisciplines = profile.selectedDisciplines
+        hasGymAccess = profile.hasGymAccess
     }
 
     private func migrateAndLoadAvailableDays(_ profile: UserProfile) {
@@ -976,7 +944,6 @@ struct ProfileView: View {
         profile.age = age
         profile.weight = weight
         profile.physiqueGoal = selectedPhysiqueGoal
-        profile.trainingStyle = buildTrainingStyle()
         profile.injuryHistory = injuryHistory
         profile.injurySensitivity = injurySensitivity
         profile.sessionsPerWeek = sessionsPerWeek
@@ -986,6 +953,8 @@ struct ProfileView: View {
         profile.weightGoal = weightGoal
         profile.strictnessLevel = strictnessLevel
         profile.availableDays = (0..<7).filter { availabilityDays[$0] }
+        profile.selectedDisciplines = selectedDisciplines
+        profile.hasGymAccess = hasGymAccess
 
         do {
             try context.save()

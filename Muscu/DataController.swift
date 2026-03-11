@@ -121,32 +121,197 @@ final class DataController {
     static func createExerciseLibrary(context: ModelContext) async -> [String: ExerciseMaster] {
         let fetch = FetchDescriptor<ExerciseMaster>()
         let existing = (try? context.fetch(fetch)) ?? []
-        if !existing.isEmpty {
-            return Dictionary(uniqueKeysWithValues: existing.map { ($0.name, $0) })
+        if existing.isEmpty {
+            let library = Self.exerciseLibraryEntries()
+            for entry in library {
+                let master = ExerciseMaster(
+                    name: entry.name,
+                    visualAsset: "figure.strengthtraining.traditional",
+                    videoUrl: nil,
+                    exerciseDescription: "Exercice : \(entry.name)",
+                    musclesTargetedString: entry.musclesTargetedString,
+                    defaultRestTime: 60
+                )
+                context.insert(master)
+            }
+
+            do {
+                try context.save()
+                print("[DataController] createExerciseLibrary: \(library.count) exercices insérés et sauvegardés.")
+            } catch {
+                print("[DataController] createExerciseLibrary error: \(error)")
+            }
         }
 
-        let library = Self.exerciseLibraryEntries()
-        for entry in library {
-            let master = ExerciseMaster(
-                name: entry.name,
-                visualAsset: "figure.strengthtraining.traditional",
-                videoUrl: nil,
-                exerciseDescription: "Exercice : \(entry.name)",
-                musclesTargetedString: entry.musclesTargetedString,
-                defaultRestTime: 60
-            )
-            context.insert(master)
-        }
-
-        do {
-            try context.save()
-            print("[DataController] createExerciseLibrary: \(library.count) exercices insérés et sauvegardés.")
-        } catch {
-            print("[DataController] createExerciseLibrary error: \(error)")
-        }
+        // Toujours s'assurer que la bibliothèque étendue et les exercices "Fighter Performance" existent.
+        await createExtendedExerciseLibrary(context: context)
+        ensureFighterPerformanceMasters(context: context)
 
         let all = (try? context.fetch(FetchDescriptor<ExerciseMaster>())) ?? []
+        print("📚 Bibliothèque totale : \(all.count) exercices chargés.")
         return Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
+    }
+
+    // MARK: - Hybrid Programs Seeding
+
+    /// Crée 5 programmes hybrides (combat, endurance, raquette, outdoor, bien‑être) si absents.
+    /// Utilise TrainingProgram/TrainingWeek/TrainingDay comme gabarit atomique.
+    static func seedHybridPrograms(context: ModelContext) async {
+        print("[DataController] seedHybridPrograms called")
+
+        let fetch = FetchDescriptor<TrainingProgram>()
+        let existing = (try? context.fetch(fetch)) ?? []
+        let existingNames = Set(existing.map { $0.name })
+
+        struct HybridDef {
+            let name: String
+            let description: String
+            let sportCategories: [SportCategory]
+            let dayTitles: [String]
+        }
+
+        let programs: [HybridDef] = [
+            HybridDef(
+                name: "Combat Sports (Striking & Grappling)",
+                description: "Bloc hybride orienté sports de combat : technique, HIIT, mobilité et force explosive.",
+                sportCategories: [.boxing, .general],
+                dayTitles: [
+                    "J1 · Technique Pure (Shadow/Drills)",
+                    "J2 · Conditionnement HIIT (Sac/Sprints)",
+                    "J3 · Mobilité & Hanche",
+                    "J4 · Force Explosive (Lests)",
+                    "J5 · Sparring ou Situation",
+                    "J6 · Travail de Pieds & Réflexes"
+                ]
+            ),
+            HybridDef(
+                name: "Endurance et Cardio",
+                description: "Cycle d’endurance (Zone 2, fractionné, tempo, sorties longues) avec renforcement.",
+                sportCategories: [.running, .general],
+                dayTitles: [
+                    "J1 · Sortie Zone 2 (Récup active)",
+                    "J2 · Fractionné Court (Vitesse)",
+                    "J3 · Renforcement Musculaire (Core/Jambes)",
+                    "J4 · Tempo Run/Ride",
+                    "J5 · Technique Spécifique",
+                    "J6 · Sortie Longue (Volume)"
+                ]
+            ),
+            HybridDef(
+                name: "Sports de Raquette",
+                description: "Programme raquettes : footwork, matchs dirigés, prévention et pliométrie.",
+                sportCategories: [.general],
+                dayTitles: [
+                    "J1 · Footwork (Échelle de rythme)",
+                    "J2 · Match ou Entraînement dirigé",
+                    "J3 · Prévention (Épaule/Poignet)",
+                    "J4 · Plyométrie (Détente)",
+                    "J5 · Match ou Tactique",
+                    "J6 · Mobilité Thoracique & Rotation"
+                ]
+            ),
+            HybridDef(
+                name: "Outdoor et Montagne",
+                description: "Préparation outdoor/montagne : force de préhension, côtes, gainage et yoga.",
+                sportCategories: [.general],
+                dayTitles: [
+                    "J1 · Force de Préhension / Doigts",
+                    "J2 · Sortie Intensité (Côtes)",
+                    "J3 · Gainage Profond & Équilibre",
+                    "J4 · Force Bas du Corps (Squats/Fentes)",
+                    "J5 · Yoga pour Montagnard",
+                    "J6 · Sortie Longue / Aventure"
+                ]
+            ),
+            HybridDef(
+                name: "Bien‑être et Mobilité",
+                description: "Bloc axé bien‑être : Pilates, Vinyasa, Yin, mobilité contrôlée et méditation.",
+                sportCategories: [.general],
+                dayTitles: [
+                    "J1 · Pilates (Force du centre)",
+                    "J2 · Vinyasa Yoga (Flow dynamique)",
+                    "J3 · Travail d'Inversion / Équilibre",
+                    "J4 · Yin Yoga (Étirements profonds)",
+                    "J5 · Mobilité Articulaire Contrôlée (CARS)",
+                    "J6 · Flow Libre / Méditation"
+                ]
+            ),
+            HybridDef(
+                name: "Fighter Performance (No Gym)",
+                description: "Programme combat sans salle : technique, HIIT, mobilité, force explosive, sac et footwork.",
+                sportCategories: [.boxing, .general],
+                dayTitles: [
+                    "J1 · Technique & Shadow Boxing — Fluidité et gestuelle",
+                    "J2 · HIIT Conditioning — Puissance sous fatigue",
+                    "J3 · Mobilité & Hanches — Souplesse spécifique combat",
+                    "J4 · Force Explosive — Puissance de frappe/saisie",
+                    "J5 · Sparring / Sac — Application réelle",
+                    "J6 · Footwork & Agilité — Placement et réaction"
+                ]
+            )
+        ]
+
+        var createdCount = 0
+
+        for def in programs where !existingNames.contains(def.name) {
+            let program = TrainingProgram(
+                name: def.name,
+                programDescription: def.description,
+                sportCategoriesString: def.sportCategories.map(\.rawValue).joined(separator: ",")
+            )
+            context.insert(program)
+
+            let week = TrainingWeek(weekNumber: 1)
+            week.program = program
+            context.insert(week)
+            program.weeks.append(week)
+
+            for (index, title) in def.dayTitles.enumerated() {
+                let day = TrainingDay(
+                    dayIndex: index,
+                    isRestDay: false,
+                    focusCategory: .hybrid,
+                    title: title
+                )
+                day.week = week
+                context.insert(day)
+                week.days.append(day)
+            }
+
+            createdCount += 1
+        }
+
+        if createdCount == 0 {
+            print("[DataController] seedHybridPrograms: all hybrid programs already exist, skipping")
+        } else {
+            do {
+                try context.save()
+                print("[DataController] seedHybridPrograms: \(createdCount) programme(s) hybrides créés.")
+            } catch {
+                print("[DataController] seedHybridPrograms error: \(error)")
+            }
+        }
+    }
+
+    // MARK: - Initial Data Seeding (Library + Hybrid Programs)
+
+    /// Seed initial de la base : bibliothèque d'exercices + programmes hybrides.
+    /// Appelé juste après validation de l'onboarding.
+    static func seedInitialData(context: ModelContext) async {
+        print("[DataController] seedInitialData called")
+
+        let existingPrograms = (try? context.fetch(FetchDescriptor<TrainingProgram>())) ?? []
+        let existingMasters = (try? context.fetch(FetchDescriptor<ExerciseMaster>())) ?? []
+
+        if existingMasters.isEmpty {
+            _ = await createExerciseLibrary(context: context)
+        }
+
+        if existingPrograms.isEmpty {
+            await seedHybridPrograms(context: context)
+        } else {
+            print("[DataController] seedInitialData: programs already exist (\(existingPrograms.count)), skipping seeding.")
+        }
     }
 
     /// Liste stricte de la bibliothèque : nom exact + catégorie (Haut, Bas, Plio, Core, Mobilité).
@@ -232,6 +397,45 @@ final class DataController {
             ("Étirement des fléchisseurs de la hanche", mobilite),
             ("Dorsiflexion de la cheville", mobilite),
         ]
+    }
+
+    /// Ajoute les exercices spécifiques Fighter Performance à la bibliothèque si manquants.
+    private static func ensureFighterPerformanceMasters(context: ModelContext) {
+        let fighterEntries: [(name: String, desc: String, muscles: String)] = [
+            ("Shadow Boxing", "Enchaînement de boxe dans le vide pour travailler la technique et la fluidité sans impact.", "fullBody"),
+            ("Burpees / Sprawls", "Mouvement explosif au sol simulant le sprawl de lutte, très exigeant métaboliquement.", "fullBody"),
+            ("90/90 Hip Switch", "Rotation contrôlée des hanches en position 90/90 pour améliorer la mobilité et la stabilité.", "legs"),
+            ("Cossack Squats", "Squats latéraux profonds pour renforcer les adducteurs et la mobilité des hanches.", "legs"),
+            ("Pompes explosives", "Pompes avec phase de projection des mains (ou clap) pour développer la puissance de poussée.", "chest,arms"),
+            ("Kettlebell Swings", "Balancés de kettlebell développant la puissance de hanche et le cardio.", "legs,back"),
+            ("Échelle de rythme", "Drills de footwork rapides sur échelle de rythme pour la coordination et la vitesse.", "fullBody")
+        ]
+
+        let existing = (try? context.fetch(FetchDescriptor<ExerciseMaster>())) ?? []
+        let existingNames = Set(existing.map { $0.name })
+
+        var inserted = 0
+        for entry in fighterEntries where !existingNames.contains(entry.name) {
+            let master = ExerciseMaster(
+                name: entry.name,
+                visualAsset: "figure.strengthtraining.traditional",
+                videoUrl: nil,
+                exerciseDescription: entry.desc,
+                musclesTargetedString: entry.muscles,
+                defaultRestTime: 60
+            )
+            context.insert(master)
+            inserted += 1
+        }
+
+        if inserted > 0 {
+            do {
+                try context.save()
+                print("[DataController] ensureFighterPerformanceMasters: \(inserted) master(s) ajoutés.")
+            } catch {
+                print("[DataController] ensureFighterPerformanceMasters error: \(error)")
+            }
+        }
     }
 
     /// Alias pour compatibilité (RootView appelle seedExerciseLibraryAndSampleSession).
