@@ -202,6 +202,7 @@ struct WorkoutView: View {
     }
 
     var body: some View {
+        let _ = debugPrintProgramsCount(displayedPrograms.count)
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -355,35 +356,40 @@ struct WorkoutView: View {
                 .font(EliteDesign.sectionTitleFont)
                 .foregroundStyle(Color.primary)
 
-            HStack(spacing: 12) {
-                Button { showingCreationSheet = true } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(textOnAccentColor)
-                        Text("Ajouter")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(textOnAccentColor)
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 14)
-                    .background(accentColor)
-                    .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
-                }
-                .buttonStyle(EliteScaleButtonStyle())
-
-                if !displayedPrograms.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(displayedPrograms) { program in
-                                let isActive = program.persistentModelID == displayedActiveProgram?.persistentModelID
-                                eliteProgramCard(program: program, isActive: isActive)
-                            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    Button { showingCreationSheet = true } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(textOnAccentColor)
+                            Text("Ajouter")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(textOnAccentColor)
                         }
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .background(accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
+                    }
+                    .buttonStyle(EliteScaleButtonStyle())
+
+                    ForEach(displayedPrograms) { program in
+                        let isActive = program.persistentModelID == displayedActiveProgram?.persistentModelID
+                        eliteProgramCard(program: program, isActive: isActive)
                     }
                 }
+                .contentShape(Rectangle())
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, EliteDesign.horizontalPadding)
             }
         }
+    }
+
+    /// Debug "dans le body" (demandé) : garantit qu'on a bien plusieurs programmes à scroller.
+    private func debugPrintProgramsCount(_ count: Int) -> Int {
+        print("DEBUG: Nombre de programmes affichés : \(count)")
+        return count
     }
 
     private func eliteProgramCard(program: TrainingProgram, isActive: Bool) -> some View {
@@ -682,7 +688,8 @@ private struct EliteProgramCardContent: View {
         .onTapGesture(count: 2, perform: onDoubleTap)
         .onTapGesture(count: 1, perform: onSingleTap)
         .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
+            // Important : un minimumDistance trop bas "mange" le scroll horizontal du parent.
+            DragGesture(minimumDistance: 12)
                 .onChanged { _ in if !isPressed { isPressed = true } }
                 .onEnded { _ in isPressed = false }
         )

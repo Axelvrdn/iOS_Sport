@@ -19,19 +19,6 @@ enum Discipline: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var emoji: String {
-        switch self {
-        case .combat: return "🥊"
-        case .endurance: return "🏃‍♂️"
-        case .racket: return "🎾"
-        case .outdoor: return "🏔"
-        case .wellness: return "🧘‍♂️"
-        case .strength: return "🏋️‍♂️"
-        case .street: return "🤸‍♂️"
-        case .ballSports: return "🏀"
-        }
-    }
-
     var displayName: String {
         switch self {
         case .combat: return "Sports de combat"
@@ -42,6 +29,19 @@ enum Discipline: String, Codable, CaseIterable, Identifiable {
         case .strength: return "Musculation & Force"
         case .street: return "Street Workout"
         case .ballSports: return "Sports de ballon"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .combat:     return "🥊"
+        case .endurance:  return "🏃‍♂️"
+        case .racket:     return "🎾"
+        case .outdoor:    return "🏔"
+        case .wellness:   return "🧘‍♂️"
+        case .strength:   return "🏋️‍♂️"
+        case .street:     return "🤸‍♂️"
+        case .ballSports: return "🏀"
         }
     }
 }

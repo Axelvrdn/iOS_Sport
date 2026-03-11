@@ -734,7 +734,7 @@ struct ProfileView: View {
             Text("\(d.emoji) \(d.displayName)")
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity)
                 .background(isSelected ? accentColor.opacity(0.25) : Color.primary.opacity(colorScheme == .dark ? 0.06 : 0.04))

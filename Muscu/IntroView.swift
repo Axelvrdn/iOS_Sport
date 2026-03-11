@@ -67,8 +67,6 @@ struct IntroView: View {
 
     private func disciplineCard(for discipline: Discipline) -> some View {
         let isSelected = state.selectedDisciplines.contains(discipline)
-        let emoji = discipline.emoji
-        let title = discipline.displayName
 
         return Button {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
@@ -76,9 +74,7 @@ struct IntroView: View {
             }
         } label: {
             VStack(spacing: 10) {
-                Text(emoji)
-                    .font(.system(size: 26))
-                Text(title)
+                Text("\(discipline.emoji) \(discipline.displayName)")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
