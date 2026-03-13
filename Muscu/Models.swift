@@ -141,6 +141,31 @@ enum SportCategory: String, Codable, CaseIterable {
     case general
 }
 
+/// Jours de la semaine utilisés pour le planning par discipline.
+enum DayOfWeek: Int, Codable, CaseIterable {
+    case monday = 0
+    case tuesday
+    case wednesday
+    case thursday
+    case friday
+    case saturday
+    case sunday
+}
+
+/// Niveau d'impact mécanique (utile pour filtrer en mode "low-power").
+enum ImpactLevel: String, Codable, CaseIterable {
+    case low
+    case medium
+    case high
+}
+
+/// Niveau de technicité / coordination requis.
+enum SkillLevel: String, Codable, CaseIterable {
+    case low
+    case medium
+    case high
+}
+
 // MARK: - BodyPart (zones pour protocole blessure)
 
 enum BodyPart: String, Codable, CaseIterable {
@@ -168,6 +193,7 @@ enum CoachProtocol: Codable, Equatable {
 
 @Model
 final class UserProfile {
+    @Attribute(.unique) var id: UUID
     var age: Int
     var weight: Double
     var physiqueGoal: PhysiqueGoal
@@ -175,23 +201,23 @@ final class UserProfile {
     var trainingStyle: TrainingStyle?
     var injuryHistory: String
     var injurySensitivity: InjurySensitivity
-    var sessionsPerWeek: Int
-    var hoursPerSession: Double
+    /// Planning par discipline (JSON sérialisé, ex: {"combat":[0,3],"endurance":[2]}).
+    var disciplineScheduleJSON: String
     var sportsHistory: String
     var currentOtherSports: String
     var weightGoal: Double
     /// 0.0 (très doux) à 1.0 (très strict)
     var strictnessLevel: Double
-    /// Représentation sérialisée des jours / créneaux disponibles (legacy)
-    var availabilityJSON: String
-    /// Jours disponibles pour l'entraînement (0=Lun … 6=Dim), stocké "0,1,2,3,4,5,6"
-    var availableDaysString: String
     /// Zones du corps sensibles/blessées (IDs ex: knee_left, shoulder_right), stocké JSON array.
     var injuredZonesJSON: String
     /// Dernière séance : date, durée (s), volume total (kg)
     var lastWorkoutDate: Date
     var lastWorkoutDurationSeconds: Int
     var lastWorkoutTotalVolumeKg: Double
+    /// Disciplines principales choisies pour la personnalisation (stockées "combat,endurance").
+    var selectedDisciplinesRaw: String
+    /// Indique si l'utilisateur a accès à une salle de sport.
+    var hasGymAccess: Bool
 
     @Relationship(deleteRule: .cascade)
     var workoutPrograms: [WorkoutProgram] = []
@@ -206,53 +232,42 @@ final class UserProfile {
         trainingStyle: TrainingStyle = .bodybuilding,
         injuryHistory: String = "",
         injurySensitivity: InjurySensitivity = .medium,
-        sessionsPerWeek: Int = 3,
-        hoursPerSession: Double = 1.0,
         sportsHistory: String = "",
         currentOtherSports: String = "",
         weightGoal: Double = 0,
         strictnessLevel: Double = 0.5,
-        availabilityJSON: String = "{}",
-        availableDaysString: String = "0,1,2,3,4,5,6",
+        id: UUID = UUID(),
         injuredZonesJSON: String = "[]",
         lastWorkoutDate: Date = .distantPast,
         lastWorkoutDurationSeconds: Int = 0,
-        lastWorkoutTotalVolumeKg: Double = 0
+        lastWorkoutTotalVolumeKg: Double = 0,
+        disciplineSchedule: [Discipline: Set<DayOfWeek>] = [:],
+        selectedDisciplines: Set<Discipline> = [.strength],
+        hasGymAccess: Bool = true
     ) {
+        self.id = id
         self.age = age
         self.weight = weight
         self.physiqueGoal = physiqueGoal
         self.trainingStyle = trainingStyle
         self.injuryHistory = injuryHistory
         self.injurySensitivity = injurySensitivity
-        self.sessionsPerWeek = sessionsPerWeek
-        self.hoursPerSession = hoursPerSession
         self.sportsHistory = sportsHistory
         self.currentOtherSports = currentOtherSports
         self.weightGoal = weightGoal
         self.strictnessLevel = strictnessLevel
-        self.availabilityJSON = availabilityJSON
-        self.availableDaysString = availableDaysString
         self.injuredZonesJSON = injuredZonesJSON
         self.lastWorkoutDate = lastWorkoutDate
         self.lastWorkoutDurationSeconds = lastWorkoutDurationSeconds
         self.lastWorkoutTotalVolumeKg = lastWorkoutTotalVolumeKg
+        self.disciplineScheduleJSON = encodeDisciplineSchedule(disciplineSchedule)
+        let limited = Array(selectedDisciplines.prefix(3))
+        self.selectedDisciplinesRaw = limited.map(\.rawValue).joined(separator: ",")
+        self.hasGymAccess = hasGymAccess
     }
 }
 
-// MARK: - UserProfile available days helpers
-
 extension UserProfile {
-    /// Indices des jours disponibles (0 = Lundi … 6 = Dimanche). Source de vérité pour planification et streak.
-    var availableDays: [Int] {
-        get {
-            parseAvailableDaysString(availableDaysString)
-        }
-        set {
-            availableDaysString = newValue.sorted().map(String.init).joined(separator: ",")
-        }
-    }
-
     /// Zones du corps marquées comme sensibles/blessées (IDs pour SceneKit / UI).
     var injuredZones: [String] {
         get {
@@ -266,11 +281,75 @@ extension UserProfile {
             }
         }
     }
+
+    /// Ensemble limité à 3 disciplines max.
+    var selectedDisciplines: Set<Discipline> {
+        get {
+            let parts = selectedDisciplinesRaw
+                .split(separator: ",")
+                .compactMap { Discipline(rawValue: String($0)) }
+            return Set(parts)
+        }
+        set {
+            let limited = Array(newValue.prefix(3))
+            selectedDisciplinesRaw = limited.map(\.rawValue).joined(separator: ",")
+        }
+    }
+
+    /// Planning par discipline : ensemble de jours réservés par discipline.
+    var disciplineSchedule: [Discipline: Set<DayOfWeek>] {
+        get { decodeDisciplineSchedule(disciplineScheduleJSON) }
+        set { disciplineScheduleJSON = encodeDisciplineSchedule(newValue) }
+    }
+
+    /// Vérifie si un jour donné est encore libre pour une nouvelle discipline (anti‑doublon).
+    func isDayAvailable(_ day: DayOfWeek) -> Bool {
+        for (_, days) in disciplineSchedule {
+            if days.contains(day) {
+                return false
+            }
+        }
+        return true
+    }
 }
 
-private func parseAvailableDaysString(_ s: String) -> [Int] {
-    let parts = s.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
-    return parts.filter { (0...6).contains($0) }
+private func encodeDisciplineSchedule(_ schedule: [Discipline: Set<DayOfWeek>]) -> String {
+    struct DTO: Codable {
+        let map: [String: [Int]]
+    }
+
+    let raw: [String: [Int]] = schedule.reduce(into: [:]) { dict, element in
+        let (discipline, days) = element
+        dict[discipline.rawValue] = days.map { $0.rawValue }
+    }
+
+    let dto = DTO(map: raw)
+    if let data = try? JSONEncoder().encode(dto),
+       let s = String(data: data, encoding: .utf8) {
+        return s
+    }
+    return "{}"
+}
+
+private func decodeDisciplineSchedule(_ json: String) -> [Discipline: Set<DayOfWeek>] {
+    struct DTO: Codable {
+        let map: [String: [Int]]
+    }
+
+    guard let data = json.data(using: .utf8),
+          let dto = try? JSONDecoder().decode(DTO.self, from: data) else {
+        return [:]
+    }
+
+    var result: [Discipline: Set<DayOfWeek>] = [:]
+    for (key, rawDays) in dto.map {
+        guard let discipline = Discipline(rawValue: key) else { continue }
+        let days = rawDays.compactMap { DayOfWeek(rawValue: $0) }
+        if !days.isEmpty {
+            result[discipline] = Set(days)
+        }
+    }
+    return result
 }
 
 // MARK: - WorkoutProgram
@@ -323,6 +402,12 @@ final class Exercise {
     var equipmentRequired: Bool
     /// Marqueur pour les exercices bonus
     var isBonus: Bool
+    /// Impact mécanique global (low / medium / high).
+    var impactLevelRaw: String
+    /// Niveau de technicité / coordination (low / medium / high).
+    var skillLevelRaw: String
+    /// Exercice de type explosif / pliométrique.
+    var isExplosive: Bool
     /// Phase (mois) du programme à laquelle appartient l’exercice (1 = Phase 1, 2 = Phase 2…)
     var phaseIndex: Int
     /// Index du jour dans la semaine (1 = Day 1, 2 = Day 2, …)
@@ -352,6 +437,9 @@ final class Exercise {
         restSeconds: Int,
         equipmentRequired: Bool,
         isBonus: Bool = false,
+        impactLevel: ImpactLevel = .medium,
+        skillLevel: SkillLevel = .medium,
+        isExplosive: Bool = false,
         phaseIndex: Int,
         dayIndex: Int,
         dayName: String,
@@ -365,12 +453,27 @@ final class Exercise {
         self.restSeconds = restSeconds
         self.equipmentRequired = equipmentRequired
         self.isBonus = isBonus
+        self.impactLevelRaw = impactLevel.rawValue
+        self.skillLevelRaw = skillLevel.rawValue
+        self.isExplosive = isExplosive
         self.phaseIndex = phaseIndex
         self.dayIndex = dayIndex
         self.dayName = dayName
         self.dayFocus = dayFocus
         self.videoUrl = videoUrl
         self.alternativeExercise = alternativeExercise
+    }
+}
+
+extension Exercise {
+    var impactLevel: ImpactLevel {
+        get { ImpactLevel(rawValue: impactLevelRaw) ?? .medium }
+        set { impactLevelRaw = newValue.rawValue }
+    }
+
+    var skillLevel: SkillLevel {
+        get { SkillLevel(rawValue: skillLevelRaw) ?? .medium }
+        set { skillLevelRaw = newValue.rawValue }
     }
 }
 
@@ -464,15 +567,24 @@ final class TrainingProgram {
     var sportCategoriesString: String
     /// Règles de validation (ex: "No double leg days")
     var validationRules: String?
+    /// Indique si ce programme est un gabarit (template) et non une instance utilisateur.
+    var isTemplate: Bool
 
     @Relationship(deleteRule: .cascade)
     var weeks: [TrainingWeek] = []
 
-    init(name: String, programDescription: String = "", sportCategoriesString: String = "", validationRules: String? = nil) {
+    init(
+        name: String,
+        programDescription: String = "",
+        sportCategoriesString: String = "",
+        validationRules: String? = nil,
+        isTemplate: Bool = false
+    ) {
         self.name = name
         self.programDescription = programDescription
         self.sportCategoriesString = sportCategoriesString
         self.validationRules = validationRules
+        self.isTemplate = isTemplate
     }
 }
 

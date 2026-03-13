@@ -173,10 +173,13 @@ struct WorkoutView: View {
         return "\(session.programName.isEmpty ? "Séance" : session.programName) • \(formatter.string(from: session.date))"
     }
 
-    private var displayedPrograms: [TrainingProgram] { programs }
+    /// Programmes visibles pour l'utilisateur (hors templates).
+    private var displayedPrograms: [TrainingProgram] {
+        programs.filter { !$0.isTemplate }
+    }
 
     private var displayedActiveProgram: TrainingProgram? {
-        userProfile?.activeTrainingProgram ?? activeProgram ?? programs.first
+        userProfile?.activeTrainingProgram ?? activeProgram ?? displayedPrograms.first
     }
 
     /// Log du jour pour l’évaluation (Pas, Sommeil).
@@ -202,6 +205,7 @@ struct WorkoutView: View {
     }
 
     var body: some View {
+        let _ = debugPrintProgramsCount(displayedPrograms.count)
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -281,7 +285,7 @@ struct WorkoutView: View {
             .onAppear {
                 if let profileProgram = userProfile?.activeTrainingProgram {
                     activeProgram = profileProgram
-                } else if activeProgram == nil, let firstProgram = programs.first {
+                } else if activeProgram == nil, let firstProgram = displayedPrograms.first {
                     activeProgram = firstProgram
                 }
             }
@@ -291,7 +295,7 @@ struct WorkoutView: View {
             .onChange(of: programs.count) { _, newCount in
                 if let profileProgram = userProfile?.activeTrainingProgram {
                     activeProgram = profileProgram
-                } else if activeProgram == nil, newCount > 0, let firstProgram = programs.first {
+                } else if activeProgram == nil, newCount > 0, let firstProgram = displayedPrograms.first {
                     activeProgram = firstProgram
                 }
             }
@@ -355,35 +359,40 @@ struct WorkoutView: View {
                 .font(EliteDesign.sectionTitleFont)
                 .foregroundStyle(Color.primary)
 
-            HStack(spacing: 12) {
-                Button { showingCreationSheet = true } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(textOnAccentColor)
-                        Text("Ajouter")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(textOnAccentColor)
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 14)
-                    .background(accentColor)
-                    .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
-                }
-                .buttonStyle(EliteScaleButtonStyle())
-
-                if !displayedPrograms.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(displayedPrograms) { program in
-                                let isActive = program.persistentModelID == displayedActiveProgram?.persistentModelID
-                                eliteProgramCard(program: program, isActive: isActive)
-                            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    Button { showingCreationSheet = true } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(textOnAccentColor)
+                            Text("Ajouter")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(textOnAccentColor)
                         }
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .background(accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: EliteDesign.cornerRadiusSmall))
+                    }
+                    .buttonStyle(EliteScaleButtonStyle())
+
+                    ForEach(displayedPrograms) { program in
+                        let isActive = program.persistentModelID == displayedActiveProgram?.persistentModelID
+                        eliteProgramCard(program: program, isActive: isActive)
                     }
                 }
+                .contentShape(Rectangle())
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, EliteDesign.horizontalPadding)
             }
         }
+    }
+
+    /// Debug "dans le body" (demandé) : garantit qu'on a bien plusieurs programmes à scroller.
+    private func debugPrintProgramsCount(_ count: Int) -> Int {
+        print("DEBUG: Nombre de programmes affichés : \(count)")
+        return count
     }
 
     private func eliteProgramCard(program: TrainingProgram, isActive: Bool) -> some View {
@@ -437,7 +446,7 @@ struct WorkoutView: View {
                 }
                 .buttonStyle(EliteScaleButtonStyle())
             } else {
-                heroEmptyCard
+                heroNoProgramCard
             }
         }
     }
@@ -557,16 +566,17 @@ struct WorkoutView: View {
         .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
     }
 
-    private var heroEmptyCard: some View {
+    /// Message affiché quand aucun programme personnalisé n'est encore actif.
+    private var heroNoProgramCard: some View {
         HStack(spacing: 16) {
             Image(systemName: "figure.run")
                 .font(.system(size: 40, weight: .ultraLight))
                 .foregroundStyle(Color.secondary.opacity(0.6))
             VStack(alignment: .leading, spacing: 4) {
-                Text("Aucune séance suggérée")
+                Text("Aucun programme actif")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.primary)
-                Text("Termine ta première séance pour démarrer la rotation.")
+                Text("Configure ton planning dans ton profil pour générer ton programme.")
                     .font(.footnote)
                     .foregroundStyle(Color.secondary)
             }
@@ -682,7 +692,8 @@ private struct EliteProgramCardContent: View {
         .onTapGesture(count: 2, perform: onDoubleTap)
         .onTapGesture(count: 1, perform: onSingleTap)
         .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
+            // Important : un minimumDistance trop bas "mange" le scroll horizontal du parent.
+            DragGesture(minimumDistance: 12)
                 .onChanged { _ in if !isPressed { isPressed = true } }
                 .onEnded { _ in isPressed = false }
         )

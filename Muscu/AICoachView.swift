@@ -163,6 +163,7 @@ struct AICoachView: View {
     /// Rate-limit haptic : max 20/s (intervalle minimum 0,05 s).
     @State private var lastHapticTime: Date = .distantPast
     @State private var hapticGenerator: UIImpactFeedbackGenerator?
+    @State private var isLowPowerMode: Bool = false
 
     init(strictnessLevel: Double, activeProgram: TrainingProgram? = nil) {
         self.strictnessLevel = strictnessLevel
@@ -245,6 +246,7 @@ struct AICoachView: View {
                 // Zone input + quick actions
                 VStack(spacing: 12) {
                     quickActionsRow
+                    lowPowerToggleRow
                     inputRow
                 }
                 .padding(.horizontal, 16)
@@ -584,6 +586,24 @@ struct AICoachView: View {
             .padding(.horizontal, 4)
         }
         .frame(height: 44)
+    }
+
+    /// Toggle pour activer le mode Low-Power (fatigue) sur le programme actif.
+    private var lowPowerToggleRow: some View {
+        HStack {
+            Toggle(isOn: $isLowPowerMode) {
+                Text("Mode Low-Power (Fatigue)")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.secondary)
+            }
+            .toggleStyle(SwitchToggleStyle(tint: accentColor))
+        }
+        .onChange(of: isLowPowerMode) { _, newValue in
+            if let program = activeProgram {
+                let targetDays = newValue ? 3 : 6
+                viewModel.adjustVolume(for: program, isLowPower: newValue, targetDays: targetDays)
+            }
+        }
     }
 
     private func quickActionButton(_ title: String) -> some View {

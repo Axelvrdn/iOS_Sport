@@ -32,7 +32,17 @@ final class WorkoutManager {
         let programs = (try? context.fetch(programFetch)) ?? []
         let profileFetch = FetchDescriptor<UserProfile>()
         let profiles = (try? context.fetch(profileFetch)) ?? []
-        let availableDays: [Int] = profiles.first?.availableDays ?? [0, 1, 2, 3, 4, 5, 6]
+        // Jours disponibles dérivés du planning par discipline (DayOfWeek) ; fallback = tous les jours.
+        let availableDays: [Int] = {
+            guard let profile = profiles.first else { return [0, 1, 2, 3, 4, 5, 6] }
+            let schedule = profile.disciplineSchedule
+            let indices = schedule.values.reduce(into: Set<Int>()) { acc, set in
+                for day in set {
+                    acc.insert(day.rawValue)
+                }
+            }
+            return indices.isEmpty ? [0, 1, 2, 3, 4, 5, 6] : Array(indices).sorted()
+        }()
 
         guard let program = programs.first else {
             updateStreakAndWeekly(availableDayIndices: availableDays, sessions: [])

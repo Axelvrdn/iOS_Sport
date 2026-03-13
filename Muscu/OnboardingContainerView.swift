@@ -92,11 +92,6 @@ struct OnboardingContainerView: View {
         Group {
             if hasCompletedOnboarding {
                 RootView()
-                    .onAppear {
-                        Task {
-                            await DataController.createDefaultProgram(context: modelContext)
-                        }
-                    }
             } else {
                 onboardingFlow
             }
@@ -127,16 +122,14 @@ struct OnboardingContainerView: View {
                 TabView(selection: $onboardingState.currentStep) {
                     WelcomeView(state: onboardingState)
                         .tag(0)
-                    OnboardingStep1View(state: onboardingState)
+                    IntroView(state: onboardingState)
                         .tag(1)
-                    OnboardingStep2View(state: onboardingState)
+                    OnboardingStep1View(state: onboardingState)
                         .tag(2)
                     OnboardingStep3View(state: onboardingState)
                         .tag(3)
-                    OnboardingStep4View(state: onboardingState)
-                        .tag(4)
                     OnboardingFinalView(state: onboardingState, hasCompletedOnboarding: $hasCompletedOnboarding)
-                        .tag(5)
+                        .tag(4)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .animation(.easeInOut(duration: 0.35), value: onboardingState.currentStep)
@@ -187,17 +180,14 @@ final class OnboardingState {
 
     var currentStep: Int = 0
 
-    // Étape 1 – Bases & objectifs
+    // Étape bases & objectifs
     var age: Int = 25
     var currentWeight: Double = 70
     var targetWeight: Double = 72
     var physiqueGoal: PhysiqueGoal = .maintain
 
-    // Étape 2 – Style d’entraînement
+    // Étape style d’entraînement
     var trainingStyleKind: TrainingStyleKind = .bodybuilding
-    var sessionsPerWeek: Int = 3
-    var minutesPerSession: Int = 60
-    var selectedDays: Set<Int> = [0, 2, 4] // L, M, V par défaut
 
     // Étape 3 – Historique & contexte
     var sportsHistoryLevel: SportsHistoryLevel = .intermediate
@@ -206,6 +196,11 @@ final class OnboardingState {
 
     // Étape 4 – Zones blessées
     var injuredZones: Set<String> = []
+
+    // Profil multi-sport (sélectionnée lors de l'onboarding ou plus tard dans le profil).
+    var selectedDisciplines: Set<Discipline> = [.strength]
+    /// Planning par discipline saisi dans l’Intro (DayOfWeek par Discipline).
+    var disciplineSchedule: [Discipline: Set<DayOfWeek>] = [:]
 
     func nextStep() {
         guard currentStep < Self.totalSteps else { return }

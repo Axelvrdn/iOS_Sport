@@ -101,21 +101,111 @@ final class AICoachViewModel {
         self.strictnessLevel = strictnessLevel
     }
 
+    // MARK: - Ajustement volume / mode Low-Power
+
+    /// Ajuste le volume d'un programme atomique (TrainingProgram) selon le mode Low-Power et le nombre de jours cibles.
+    /// - Parameters:
+    ///   - program: Programme sur lequel appliquer l'ajustement.
+    ///   - isLowPower: Si true, divise les séries / rounds par 2.
+    ///   - targetDays: Ex: 6 (plein) ou 3 (pivot compressé A/B/C).
+    func adjustVolume(for program: TrainingProgram, isLowPower: Bool, targetDays: Int) {
+        guard let context = modelContext else { return }
+
+        // 1) Réduction globale du volume (sets/rounds) si Low-Power.
+        if isLowPower {
+            for week in program.weeks {
+                for day in week.days {
+                    guard let recipe = day.sessionRecipe else { continue }
+                    for se in recipe.exercises {
+                        let currentSets = max(se.sets, 1)
+                        se.sets = max(1, currentSets / 2)
+                    }
+                }
+            }
+        }
+
+        // 2) Pivot 6 → 3 jours (A/B/C) pour Fighter Performance.
+        if targetDays == 3 {
+            pivotFighterPerformanceProgram(program)
+        }
+
+        do {
+            try context.save()
+        } catch {
+            // En cas d'erreur de persistance, on ne fait rien (grâce optimiste).
+        }
+    }
+
+    /// Fusionne les 6 jours Fighter Performance en 3 blocs A/B/C.
+    private func pivotFighterPerformanceProgram(_ program: TrainingProgram) {
+        guard let week = program.weeks.first else { return }
+
+        let days = week.days
+
+        func findDay(_ substring: String) -> TrainingDay? {
+            days.first { $0.title.localizedCaseInsensitiveContains(substring) }
+        }
+
+        // Jour A : HIIT + Force
+        if let hiitDay = findDay("HIIT Conditioning"),
+           let forceDay = findDay("Force Explosive") {
+            mergeDay(source: forceDay, into: hiitDay)
+        }
+
+        // Jour B : Shadow + Sparring
+        if let shadowDay = findDay("Technique & Shadow"),
+           let sparringDay = findDay("Sparring / Sac") {
+            mergeDay(source: sparringDay, into: shadowDay)
+        }
+
+        // Jour C : Mobilité + Agilité
+        if let mobilityDay = findDay("Mobilité & Hanches"),
+           let agilityDay = findDay("Footwork & Agilité") {
+            mergeDay(source: agilityDay, into: mobilityDay)
+        }
+    }
+
+    /// Déplace tous les exercices SessionExercise de source vers target, puis marque source comme jour de repos.
+    private func mergeDay(source: TrainingDay, into target: TrainingDay) {
+        guard let sourceRecipe = source.sessionRecipe else { return }
+
+        if target.sessionRecipe == nil {
+            let newRecipe = SessionRecipe(
+                name: target.title,
+                goal: .volume,
+                bodyFocus: .fullBody,
+                sportCategoriesString: ""
+            )
+            newRecipe.day = target
+            target.sessionRecipe = newRecipe
+        }
+
+        guard let targetRecipe = target.sessionRecipe else { return }
+
+        for se in sourceRecipe.exercises {
+            se.session = targetRecipe
+            targetRecipe.exercises.append(se)
+        }
+
+        source.isRestDay = true
+        source.title = "Repos (fusionné)"
+        source.sessionRecipe = nil
+    }
+
     // MARK: - Pipeline principal : génération de réponse
 
     /// Construit le prompt complet (contexte + message utilisateur) envoyé au LLM.
-    func generateFullPrompt(for userMessage: String) -> String {
-        let context = getUserContext(isMinimal: shouldUseMinimalContext(for: userMessage))
+    func generateFullPrompt(for userMessage: String, context: String) -> String {
         return """
-        [CONTEXT_UTILISATEUR]
-        \(context)
+[CONTEXT_UTILISATEUR]
+\(context)
 
-        [FIN_CONTEXT_UTILISATEUR]
+[FIN_CONTEXT_UTILISATEUR]
 
-        [MESSAGE_UTILISATEUR]
-        \(userMessage)
-        [FIN_MESSAGE_UTILISATEUR]
-        """
+[MESSAGE_UTILISATEUR]
+\(userMessage)
+[FIN_MESSAGE_UTILISATEUR]
+"""
     }
 
     /// Envoie un message utilisateur. Si IA locale : génération Mistral async + streaming. Sinon : moteur de règles + typewriter.
@@ -152,7 +242,9 @@ final class AICoachViewModel {
 
         let fullReply: String
         do {
-            let fullPrompt = generateFullPrompt(for: prompt)
+            let useMinimalContext = shouldUseMinimalContext(for: prompt)
+            let contextString = getUserContext(isMinimal: useMinimalContext)
+            let fullPrompt = generateFullPrompt(for: prompt, context: contextString)
             let messagesPayload: [LLMChatMessage] = [
                 LLMChatMessage(role: "system", content: AICoachSystemPrompt.eliteAthlete),
                 LLMChatMessage(role: "user", content: fullPrompt)
@@ -214,10 +306,10 @@ final class AICoachViewModel {
         let profileFetch = FetchDescriptor<UserProfile>()
         let profiles = (try? context.fetch(profileFetch)) ?? []
         if let profile = profiles.first {
+            let plannedSessionsPerWeek = profile.disciplineSchedule.values.reduce(0) { $0 + $1.count }
             sections.append("""
-            Profil: âge \(profile.age), poids \(profile.weight) kg, objectif physique \(profile.physiqueGoal.rawValue). \
-            Niveau strictesse \(String(format: "%.2f", profile.strictnessLevel)). Blessures / zones sensibles actuelles: \(profile.injuredZonesJSON).
-            """)
+Profil: âge \(profile.age), poids \(profile.weight) kg, objectif physique \(profile.physiqueGoal.rawValue), \(plannedSessionsPerWeek) séances planifiées/semaine, dernière séance \(formatDate(profile.lastWorkoutDate)), durée dernière séance \(profile.lastWorkoutDurationSeconds)s, volume \(profile.lastWorkoutTotalVolumeKg) kg. Niveau strictesse \(String(format: "%.2f", profile.strictnessLevel)). Zones sensibles: \(profile.injuredZonesJSON).
+""")
         } else {
             sections.append("Profil: non renseigné.")
         }
@@ -282,6 +374,51 @@ final class AICoachViewModel {
         guard trimmed.count <= 12 else { return false }
         let smallTalk = ["salut", "hello", "yo", "coucou", "hey", "bonjour", "bonsoir", "ça va", "cv"]
         return smallTalk.contains { trimmed.contains($0) }
+    }
+
+    // MARK: - Adaptation automatique des programmes à partir du profil
+
+    /// Adapte un programme à l'utilisateur courant (No Gym, etc.).
+    func adaptProgramForCurrentUser(_ program: TrainingProgram) {
+        guard let context = modelContext else { return }
+        let profiles = (try? context.fetch(FetchDescriptor<UserProfile>())) ?? []
+        guard let profile = profiles.first else { return }
+
+        if !profile.hasGymAccess {
+            applyNoGymVariants(to: program)
+        }
+    }
+
+    /// Masque / remplace les exercices nécessitant une salle par des variantes poids du corps.
+    private func applyNoGymVariants(to program: TrainingProgram) {
+        guard let context = modelContext else { return }
+
+        let masters = (try? context.fetch(FetchDescriptor<ExerciseMaster>())) ?? []
+        let byName = Dictionary(uniqueKeysWithValues: masters.map { ($0.name, $0) })
+
+        // Mapping manuel des variantes No Gym.
+        let bodyweightFallbacks: [String: String] = [
+            "Back squat": "Goblet Squat",
+            "Trap Bar Deadlift": "Soulevé de terre jambes tendues",
+            "Développé militaire": "Pompes explosives",
+            "Face-Pulls": "Oiseau haltères",
+            "Farmer's Walk": "Carry Valise"
+        ]
+
+        for week in program.weeks {
+            for day in week.days {
+                guard let recipe = day.sessionRecipe else { continue }
+
+                for se in recipe.exercises {
+                    guard let master = se.exercise else { continue }
+                    // Si une variante No‑Gym est définie pour cet exercice, on la remplace.
+                    if let fallbackName = bodyweightFallbacks[master.name],
+                       let fallbackMaster = byName[fallbackName] {
+                        se.exercise = fallbackMaster
+                    }
+                }
+            }
+        }
     }
 
     private func formatDate(_ date: Date) -> String {
