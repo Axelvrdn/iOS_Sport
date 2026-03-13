@@ -12,6 +12,9 @@ import SwiftData
 @MainActor
 final class DataController {
 
+    /// Évite d'exécuter le seeding en double (logs et inserts dupliqués).
+    private static var isSeeding = false
+
     /// Vide toutes les données du programme atomique (TrainingProgram, ExerciseMaster, SessionRecipe, etc.).
     /// À utiliser avant de rappeler createDefaultProgram pour forcer une régénération.
     static func deleteAll(context: ModelContext) {
@@ -37,10 +40,42 @@ final class DataController {
         }
     }
 
+    /// Nettoyage radical des anciens modèles locaux (Mistral, anciens LLM).
+    /// Supprime Application Support/MistralModel, Application Support/Phi3Model et Application Support/LLMModel si présents.
+    static func nuclearCleanup() {
+        let fm = FileManager.default
+        let urls = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        guard let appSupport = urls.first else { return }
+
+        let candidates = [
+            appSupport.appendingPathComponent("MistralModel", isDirectory: true),
+            appSupport.appendingPathComponent("Phi3Model", isDirectory: true),
+            appSupport.appendingPathComponent("LLMModel", isDirectory: true)
+        ]
+
+        for dir in candidates {
+            if fm.fileExists(atPath: dir.path) {
+                do {
+                    try fm.removeItem(at: dir)
+                    print("[DataController] nuclearCleanup: dossier supprimé \(dir.lastPathComponent)")
+                } catch {
+                    print("[DataController] nuclearCleanup: échec suppression \(dir.lastPathComponent): \(error)")
+                }
+            }
+        }
+    }
+
     /// Crée le programme "Programme Volley & Détente" (8 semaines) **uniquement si la base ne contient aucun programme**.
     /// Ne jamais appeler si des données existent (évite doublons et corruptions).
     /// 100 % atomique : TrainingProgram → TrainingWeek → TrainingDay → SessionRecipe → SessionExercise → ExerciseMaster.
     static func createDefaultProgram(context: ModelContext) async {
+        guard !isSeeding else {
+            print("[DataController] createDefaultProgram already running, skipping duplicate call")
+            return
+        }
+        isSeeding = true
+        defer { isSeeding = false }
+
         print("[DataController] createDefaultProgram called")
 
         let fetch = FetchDescriptor<TrainingProgram>()
