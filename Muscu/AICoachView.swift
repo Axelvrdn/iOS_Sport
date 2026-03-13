@@ -264,19 +264,14 @@ struct AICoachView: View {
             .onAppear {
                 viewModel.activeProgram = activeProgram
                 viewModel.modelContext = modelContext
-                viewModel.useLocalAIModel = localAIEnabled && HardwareManager.isLocalAISupported
-                if localAIEnabled && HardwareManager.isLocalAISupported && LLMManager.isModelAvailable {
-                    Task { try? await LLMManager.shared.loadModel() }
-                }
+                // L’IA utilise désormais uniquement l’API distante ; le flag localAIEnabled n’active que le coach ou le moteur de règles.
+                viewModel.useLocalAIModel = localAIEnabled
             }
             .onChange(of: activeProgram) { _, newProgram in
                 viewModel.activeProgram = newProgram
             }
             .onChange(of: localAIEnabled) { _, enabled in
-                viewModel.useLocalAIModel = enabled && HardwareManager.isLocalAISupported
-                if enabled && HardwareManager.isLocalAISupported && LLMManager.isModelAvailable {
-                    Task { try? await LLMManager.shared.loadModel() }
-                }
+                viewModel.useLocalAIModel = enabled
             }
             .navigationTitle("AI Coach")
             .navigationBarTitleDisplayMode(.inline)

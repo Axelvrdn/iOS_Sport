@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 // MARK: - Routes Paramètres (pour NavigationPath + masquage TabBar)
 
@@ -478,11 +479,9 @@ struct AICoachSettingsView: View {
     @Environment(\.tabBarVisibilityStore) private var tabBarVisibilityStore
     @AppStorage(isAICoachVoiceEnabledKey) private var isVoiceEnabled: Bool = false
     @AppStorage(aiCoachVoiceGenderKey) private var voiceGenderRaw: String = AICoachVoiceGender.female.rawValue
-    @AppStorage(localAIEnabledKey) private var localAIEnabled: Bool = false
-    @AppStorage(localAIModelDownloadCompletedKey) private var modelDownloadCompleted: Bool = false
     @Query private var profiles: [UserProfile]
+    @State private var settingsManager = AISettingsManager.shared
     @State private var strictnessLevel: Double = 0.5
-    @State private var showAIModelDownloadOverlay: Bool = false
 
     private var profile: UserProfile? { profiles.first }
     private var voiceGender: Binding<AICoachVoiceGender> {
@@ -523,16 +522,24 @@ struct AICoachSettingsView: View {
             }
 
             Section {
-                Toggle("Activer l'IA Locale (Beta)", isOn: $localAIEnabled)
-                if localAIEnabled && !HardwareManager.isLocalAISupported {
-                    Label(HardwareManager.unsupportedDeviceMessage, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(settingsManager.isConfigured ? Color.green : Color.red)
+                        .frame(width: 10, height: 10)
+                    Text(settingsManager.isConfigured ? "API configurée" : "API non configurée")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                NavigationLink("Configurer l’API") {
+                    AICoachAPISettingsView()
+                }
+                if let url = URL(string: "https://aistudio.google.com/") {
+                    Link("Obtenir une clé Gemini", destination: url)
                 }
             } header: {
-                Text("IA Locale")
+                Text("Configuration du Coach IA")
             } footer: {
-                Text("Utilise un modèle on-device pour des réponses plus riches. Nécessite au moins 8 Go de RAM (iPhone 15 Pro, M1 ou supérieur). Si désactivé, le coach utilise uniquement le moteur de règles léger.")
+                Text("Ajoutez une clé API OpenAI, Groq ou Gemini (Google AI Studio) pour activer le Coach IA.")
             }
 
             Section {
@@ -558,15 +565,6 @@ struct AICoachSettingsView: View {
         .onChange(of: strictnessLevel) { _, newValue in
             profile?.strictnessLevel = newValue
             try? context.save()
-        }
-        .onChange(of: localAIEnabled) { _, newValue in
-            if newValue && !modelDownloadCompleted && HardwareManager.isLocalAISupported {
-                showAIModelDownloadOverlay = true
-            }
-        }
-        .fullScreenCover(isPresented: $showAIModelDownloadOverlay) {
-            AIModelDownloadView()
-                .onDisappear { showAIModelDownloadOverlay = false }
         }
     }
 }

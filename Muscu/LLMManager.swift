@@ -12,6 +12,9 @@ import MLX
 import MLXNN
 import MLXLLM
 import MLXLMCommon
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Gestionnaire du modèle local (Mistral 7B 4bit MLX). Charge depuis Application Support/MistralModel.
 @MainActor
@@ -46,14 +49,31 @@ final class LLMManager {
         guard Self.isModelAvailable else {
             throw LLMManagerError.modelFilesMissing
         }
+
+        // Libère autant que possible avant de charger le modèle lourd.
+        URLCache.shared.removeAllCachedResponses()
+
+        // Monitoring RAM avant / après chargement.
+        Self.reportMemoryUsage(label: "avant chargement modèle")
+
         do {
+            // Limite le cache GPU MLX à 1 Go pour éviter les pics au‑delà de 3 Go.
+            MLX.GPU.set(cacheLimit: 1 * 1024 * 1024 * 1024)
+
             let model = try await MLXLMCommon.loadModel(directory: modelURL)
-            chatSession = ChatSession(model)
+
+            autoreleasepool {
+                // Réduit la durée de vie d'éventuels objets intermédiaires.
+                chatSession = ChatSession(model)
+            }
+
+            // Libère le cache GPU après chargement.
+            MLX.GPU.clearCache()
+
             print("✅ Modèle chargé avec succès")
+            Self.reportMemoryUsage(label: "après chargement modèle")
         } catch {
             print("❌ ERREUR Chargement: \(error)")
-            // Si la configuration est corrompue (ex: config.json non‑JSON),
-            // on nettoie entièrement le dossier modèle pour forcer un nouveau téléchargement propre.
             let description = String(describing: error)
             if description.contains("configurationDecodingError") || description.contains("config.json") {
                 AIModelDownloader.clearModelFolder()
@@ -79,9 +99,12 @@ final class LLMManager {
             }
         }
         guard let session = chatSession else { return nil }
-        let fullPrompt = buildFullPrompt(prompt: prompt, systemPrompt: systemPrompt, context: context)
+        let trimmedContext = Self.truncatedContext(context, maxCharacters: 4096) // ~fenêtre réduite
+        let fullPrompt = buildFullPrompt(prompt: prompt, systemPrompt: systemPrompt, context: trimmedContext)
         do {
-            return try await session.respond(to: fullPrompt)
+            let response = try await session.respond(to: fullPrompt)
+            MLX.GPU.clearCache()
+            return response
         } catch {
             print("[LLMManager] generate failed: \(error)")
             return nil
@@ -107,19 +130,19 @@ final class LLMManager {
             }
         }
         guard let session = chatSession else { return "" }
-        let fullPrompt = buildFullPrompt(prompt: prompt, systemPrompt: systemPrompt, context: context)
+        let trimmedContext = Self.truncatedContext(context, maxCharacters: 4096)
+        let fullPrompt = buildFullPrompt(prompt: prompt, systemPrompt: systemPrompt, context: trimmedContext)
         print("🧠 Début de la génération pour le prompt: \(prompt)")
         var fullResponse = ""
         do {
             let response = try await session.respond(to: fullPrompt)
             fullResponse = response
+            MLX.GPU.clearCache()
             if response.isEmpty {
                 print("⚠️ Réponse vide du modèle")
             }
             for char in response {
-                let token = String(char)
-                print("📝 Token reçu: \(token)")
-                await onToken(token)
+                await onToken(String(char))
             }
             return fullResponse
         } catch {
@@ -144,6 +167,32 @@ final class LLMManager {
     /// Décharge le modèle de la mémoire.
     func unloadModel() {
         chatSession = nil
+        MLX.GPU.clearCache()
+    }
+
+    // MARK: - RAM Monitoring & Contexte
+
+    /// Tronque le contexte pour limiter la taille effective de la fenêtre (RAM).
+    private static func truncatedContext(_ context: String, maxCharacters: Int) -> String {
+        guard context.count > maxCharacters else { return context }
+        return String(context.suffix(maxCharacters))
+    }
+
+    /// Log la mémoire utilisée (resident size) avec un label.
+    private static func reportMemoryUsage(label: String) {
+        #if canImport(Darwin)
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / mach_msg_type_number_t(MemoryLayout<integer_t>.size)
+        let kerr = withUnsafeMutablePointer(to: &info) { infoPtr in
+            infoPtr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { machPtr in
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), machPtr, &count)
+            }
+        }
+        if kerr == KERN_SUCCESS {
+            let usedMB = Double(info.resident_size) / (1024 * 1024)
+            print("📊 [RAM] (\(label)) Mémoire utilisée: \(String(format: "%.1f", usedMB)) MB")
+        }
+        #endif
     }
 }
 

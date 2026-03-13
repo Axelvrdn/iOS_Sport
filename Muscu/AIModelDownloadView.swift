@@ -194,6 +194,12 @@ struct AIModelDownloadView: View {
     }
 
     private var speedText: String {
+        if downloader.errorMessage != nil {
+            return "Erreur de téléchargement (voir alerte)."
+        }
+        if downloader.isDownloading && downloader.downloadSpeed <= 0 {
+            return "Téléchargement en pause / en attente réseau…"
+        }
         guard downloader.downloadSpeed > 0 else { return "Calcul..." }
         let speed = ByteCountFormatter.string(fromByteCount: Int64(downloader.downloadSpeed), countStyle: .file)
         return "\(speed)/s"

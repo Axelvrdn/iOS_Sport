@@ -16,39 +16,61 @@ import Observation
 private enum AICoachSystemPrompt {
     static let eliteAthlete = """
     Tu es un coach de performance de haut niveau, expert en biomécanique et physiologie. Ton ton est motivant, concis et "Elite".
+
     Règles strictes :
     - Blessures : Si l'utilisateur mentionne une douleur, active DIRECTEMENT le protocole de remplacement d'exercice. Ne propose jamais d'exercices risqués pour la zone concernée.
     - Progression : Tu analyses ses records (PRs) fournis dans le contexte. S'il stagne, suggère une semaine de Deload ou une augmentation de 2,5 kg sur l'exercice concerné.
     - Badges : Tu as le pouvoir d'attribuer des badges (ex. "Sagesse") si l'utilisateur accepte de se reposer ou d'appliquer un Deload — tu peux le mentionner pour renforcer la décision.
-    - Modifications de poids ou planning : inclus en fin de réponse un flag machine-readable : [ACTION: UPDATE_WEIGHT, VALUE: +2.5] ou [ACTION: DELOAD] etc. Une seule action par message. Ne répète pas le flag dans le texte lisible.
+    - Modifications de poids ou planning : tu peux proposer des ajustements via des commandes machine-readable.
+    - Tu NE DOIS PAS inventer de nouveaux exercices. Si un exercice n’est pas présent dans le programme du jour ou n’est pas mentionné explicitement par l’utilisateur, reste général (par ex. "travail de renforcement du bas du corps") ou demande une précision. Ne crée jamais de nom d’exercice de musculation qui n’existe pas dans le contexte.
+
+    SYSTÈME DE COMMANDES (FORMAT JSON) :
+    - Si tu veux signaler une blessure à ajouter, ajoute À LA FIN de ta réponse, sur une seule ligne, un bloc JSON précédé de "ACTION:" :
+      ACTION: {"type": "ADD_INJURY", "part": "<partie_du_corps>"}
+      Exemple : ACTION: {"type": "ADD_INJURY", "part": "genou"}
+    - Si tu veux modifier le programme, ajoute :
+      ACTION: {"type": "UPDATE_PROGRAM", "day": "<jour>", "exercises": ["Exercice 1", "Exercice 2", "..."]}
+
+    Contraintes :
+    - N'ajoute au maximum QU'UN seul bloc ACTION par réponse.
+    - Ne mets JAMAIS ce JSON dans le texte lisible principal, uniquement à la fin. Le JSON doit être sur sa propre ligne, après ta réponse naturelle.
+    - Réponds toujours en français impeccable, avec les bons accents (é, à, è, ô, ç, etc.).
+    - Tes réponses doivent être concises et, autant que possible, structurées avec des listes à puces pour les consignes et programmes.
     """
 }
 
 // MARK: - Parser des flags d'action (Click to Apply)
 
 enum AICoachActionParser {
-    /// Regex pour [ACTION: XXX, VALUE: YYY] ou [ACTION: XXX]. Retourne (texte sans flag, action, value).
+    /// Parse un bloc JSON de commande précédé de "ACTION:".
+    /// - Format attendu, en fin de réponse, sur sa propre ligne :
+    ///   ACTION: {"type": "...", ...}
+    /// - Retourne le texte nettoyé (sans la ligne ACTION) + le JSON brut en String.
     static func parse(_ rawReply: String) -> (displayText: String, action: String?, actionValue: String?) {
-        let pattern = #"\[ACTION:\s*([^\],]+)(?:,\s*VALUE:\s*([^\]]+))?\]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return (rawReply, nil, nil)
-        }
-        let range = NSRange(rawReply.startIndex..., in: rawReply)
         var displayText = rawReply
-        var action: String?
-        var actionValue: String?
+        var actionJSON: String?
 
-        if let match = regex.firstMatch(in: rawReply, range: range) {
-            if let actionRange = Range(match.range(at: 1), in: rawReply) {
-                action = String(rawReply[actionRange]).trimmingCharacters(in: .whitespaces)
+        // On inspecte la dernière ligne (ou les dernières lignes) pour trouver "ACTION:".
+        let lines = rawReply.split(separator: "\n", omittingEmptySubsequences: false)
+        var linesWithoutAction: [Substring] = []
+
+        for line in lines {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("ACTION:"),
+               let range = line.range(of: "ACTION:") {
+                let jsonPart = line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+                if !jsonPart.isEmpty {
+                    actionJSON = String(jsonPart)
+                }
+                // On n’ajoute pas cette ligne au displayText.
+            } else {
+                linesWithoutAction.append(line)
             }
-            if match.numberOfRanges > 2, let valueRange = Range(match.range(at: 2), in: rawReply) {
-                actionValue = String(rawReply[valueRange]).trimmingCharacters(in: .whitespaces)
-            }
-            displayText = (rawReply as NSString).replacingCharacters(in: match.range, with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        return (displayText, action, actionValue)
+
+        displayText = linesWithoutAction.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return (displayText, actionJSON, nil)
     }
 }
 
@@ -81,14 +103,19 @@ final class AICoachViewModel {
 
     // MARK: - Pipeline principal : génération de réponse
 
-    /// Génère la réponse (moteur de règles uniquement). Utilisé quand useLocalAIModel == false.
-    private func generateResponseRulesOnly(for prompt: String) -> (reply: String, suggestedAction: String?, suggestedActionValue: String?, suggestedProtocol: CoachProtocol?) {
-        let contextString = getUserContext()
-        let (rawReply, suggestedAction, suggestedProtocol) = processUserMessage(message: prompt, userContext: contextString)
-        let (displayText, parsedAction, parsedValue) = AICoachActionParser.parse(rawReply)
-        let finalAction = parsedAction ?? suggestedAction
-        let finalValue = parsedAction != nil ? parsedValue : nil
-        return (displayText, finalAction, finalValue, suggestedProtocol)
+    /// Construit le prompt complet (contexte + message utilisateur) envoyé au LLM.
+    func generateFullPrompt(for userMessage: String) -> String {
+        let context = getUserContext(isMinimal: shouldUseMinimalContext(for: userMessage))
+        return """
+        [CONTEXT_UTILISATEUR]
+        \(context)
+
+        [FIN_CONTEXT_UTILISATEUR]
+
+        [MESSAGE_UTILISATEUR]
+        \(userMessage)
+        [FIN_MESSAGE_UTILISATEUR]
+        """
     }
 
     /// Envoie un message utilisateur. Si IA locale : génération Mistral async + streaming. Sinon : moteur de règles + typewriter.
@@ -99,23 +126,21 @@ final class AICoachViewModel {
         let userMsg = AICoachMessage(text: trimmed, isUser: true, suggestedAction: nil, suggestedActionValue: nil, suggestedProtocol: nil)
         messages.append(userMsg)
 
-        if useLocalAIModel {
-            Task { await submitMessageWithLocalAI(trimmed) }
-        } else {
-            let (reply, suggestedAction, suggestedActionValue, suggestedProtocol) = generateResponseRulesOnly(for: trimmed)
-            let aiMessage = AICoachMessage(
-                text: reply,
-                isUser: false,
-                suggestedAction: suggestedAction,
-                suggestedActionValue: suggestedActionValue,
-                suggestedProtocol: suggestedProtocol
+        // Si aucune API n'est configurée, on prévient l'utilisateur et on ne lance rien.
+        guard AISettingsManager.shared.isConfigured else {
+            let warning = AICoachMessage(
+                text: "Configuration requise : ajoute une clé API Groq ou OpenAI dans les réglages pour discuter avec le coach.",
+                isUser: false
             )
-            messages.append(aiMessage)
-            simulateTyping(for: reply, messageId: aiMessage.id)
+            messages.append(warning)
+            return
         }
+
+        print("🤖 IA en train de générer pour le prompt : \(trimmed)")
+        Task { await submitMessageWithLocalAI(trimmed) }
     }
 
-    /// Génération réelle via Mistral (LLMManager) avec streaming. Fallback vers moteur de règles si timeout 5s sans réponse.
+    /// Génération réelle via LLM distant (LLMService) avec streaming.
     private func submitMessageWithLocalAI(_ prompt: String) async {
         isProcessing = true
         let placeholderMessage = AICoachMessage(text: "", isUser: false, suggestedAction: nil, suggestedActionValue: nil, suggestedProtocol: nil)
@@ -123,36 +148,36 @@ final class AICoachViewModel {
         typingMessageId = placeholderMessage.id
         currentTypingMessage = ""
 
-        var fallbackUsed = false
         let contextString = getUserContext()
 
-        let streamTask = Task {
-            await LLMManager.shared.generateStreaming(
-                prompt: prompt,
-                systemPrompt: AICoachSystemPrompt.eliteAthlete,
-                context: contextString,
-                maxTokens: 500,
-                temperature: 0.6
-            ) { [weak self] token in
+        let fullReply: String
+        do {
+            let fullPrompt = generateFullPrompt(for: prompt)
+            let messagesPayload: [LLMChatMessage] = [
+                LLMChatMessage(role: "system", content: AICoachSystemPrompt.eliteAthlete),
+                LLMChatMessage(role: "user", content: fullPrompt)
+            ]
+
+            fullReply = try await LLMService.shared.sendStreaming(messages: messagesPayload) { [weak self] token in
                 guard let self else { return }
                 self.currentTypingMessage += token
             }
-        }
-
-        let timeoutTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            await MainActor.run {
-                if self.currentTypingMessage.isEmpty && !fallbackUsed {
-                    fallbackUsed = true
-                    self.applyFallbackForLocalAI(prompt: prompt, placeholderMessage: placeholderMessage)
-                }
+        } catch {
+            isProcessing = false
+            typingMessageId = nil
+            currentTypingMessage = ""
+            if messages.last?.id == placeholderMessage.id {
+                messages.removeLast()
             }
-        }
-
-        let fullReply = await streamTask.value
-        _ = await timeoutTask.value
-
-        if fallbackUsed {
+            let ns = error as NSError
+            let message: String
+            if ns.domain == "LLMService" && ns.code == 429 {
+                message = "Le coach est très sollicité en ce moment. Attends quelques secondes avant de renvoyer ton message."
+            } else {
+                message = "Le coach n’a pas pu répondre pour le moment. Vérifie ta connexion et réessaie."
+            }
+            let errMsg = AICoachMessage(text: message, isUser: false)
+            messages.append(errMsg)
             return
         }
 
@@ -164,8 +189,11 @@ final class AICoachViewModel {
         if messages.last?.id == placeholderMessage.id {
             messages.removeLast()
         }
+        let finalText = displayText.isEmpty
+            ? "Je n'ai pas pu générer de réponse pour le moment. Réessaie dans quelques secondes."
+            : displayText
         let finalMessage = AICoachMessage(
-            text: displayText.isEmpty ? "Je n'ai pas pu générer de réponse. Réessaie ou désactive l'IA locale." : displayText,
+            text: finalText,
             isUser: false,
             suggestedAction: parsedAction,
             suggestedActionValue: parsedValue,
@@ -174,42 +202,21 @@ final class AICoachViewModel {
         messages.append(finalMessage)
     }
 
-    /// Fallback : moteur de règles quand le modèle MLX ne répond pas (timeout ou erreur).
-    private func applyFallbackForLocalAI(prompt: String, placeholderMessage: AICoachMessage) {
-        isProcessing = false
-        typingMessageId = nil
-        currentTypingMessage = ""
-        let (reply, suggestedAction, suggestedActionValue, suggestedProtocol) = generateResponseRulesOnly(for: prompt)
-        if messages.last?.id == placeholderMessage.id {
-            messages.removeLast()
-        }
-        let fallbackMessage = AICoachMessage(
-            text: reply,
-            isUser: false,
-            suggestedAction: suggestedAction,
-            suggestedActionValue: suggestedActionValue,
-            suggestedProtocol: suggestedProtocol
-        )
-        messages.append(fallbackMessage)
-    }
-
     // MARK: - Pipeline de données SwiftData → contexte texte pour l'IA
 
     /// Transforme les données SwiftData (Profil, séance du jour, records/PRs) en chaîne lisible par l'IA. Injecté au début de chaque "tour" de discussion.
-    func getUserContext() -> String {
+    func getUserContext(isMinimal: Bool = false) -> String {
         guard let context = modelContext else { return "Contexte indisponible." }
 
         var sections: [String] = []
 
-        // Profil
+        // Profil minimal
         let profileFetch = FetchDescriptor<UserProfile>()
         let profiles = (try? context.fetch(profileFetch)) ?? []
         if let profile = profiles.first {
             sections.append("""
-            Profil: âge \(profile.age), poids \(profile.weight) kg, objectif physique \(profile.physiqueGoal.rawValue), \
-            \(profile.sessionsPerWeek) séances/semaine, dernière séance \(formatDate(profile.lastWorkoutDate)), \
-            durée dernière séance \(profile.lastWorkoutDurationSeconds)s, volume \(profile.lastWorkoutTotalVolumeKg) kg. \
-            Niveau strictesse \(String(format: "%.2f", profile.strictnessLevel)). Zones sensibles: \(profile.injuredZonesJSON).
+            Profil: âge \(profile.age), poids \(profile.weight) kg, objectif physique \(profile.physiqueGoal.rawValue). \
+            Niveau strictesse \(String(format: "%.2f", profile.strictnessLevel)). Blessures / zones sensibles actuelles: \(profile.injuredZonesJSON).
             """)
         } else {
             sections.append("Profil: non renseigné.")
@@ -217,18 +224,28 @@ final class AICoachViewModel {
 
         // Séance du jour (première SessionRecipe du programme actif)
         if let program = activeProgram, let recipe = CoachProtocolApplier.firstSessionRecipe(in: program) {
-            var sessionLines = ["Séance du jour: \(recipe.name), objectif \(recipe.goal.rawValue), focus \(recipe.bodyFocus.rawValue)."]
-            for (idx, se) in recipe.exercises.enumerated() {
-                let name = se.exercise?.name ?? "Exercice"
-                let load = se.loadStrategy == .fixedWeight ? "\(se.loadValue) kg" : "\(se.loadValue)% 1RM"
-                sessionLines.append("  \(idx + 1). \(name): \(se.sets)x\(se.reps), repos \(se.restTime)s, charge \(load).")
+            if isMinimal {
+                sections.append("Séance du jour: \(recipe.name), objectif \(recipe.goal.rawValue), focus \(recipe.bodyFocus.rawValue).")
+            } else {
+                var sessionLines = ["Séance du jour: \(recipe.name), objectif \(recipe.goal.rawValue), focus \(recipe.bodyFocus.rawValue)."]
+                for (idx, se) in recipe.exercises.enumerated() {
+                    let name = se.exercise?.name ?? "Exercice"
+                    let load = se.loadStrategy == .fixedWeight ? "\(se.loadValue) kg" : "\(se.loadValue)% 1RM"
+                    sessionLines.append("  \(idx + 1). \(name): \(se.sets)x\(se.reps), repos \(se.restTime)s, charge \(load).")
+                }
+                sections.append(sessionLines.joined(separator: "\n"))
             }
-            sections.append(sessionLines.joined(separator: "\n"))
         } else {
             sections.append("Séance du jour: aucun programme actif ou séance vide.")
         }
 
-        // Records (PRs) — ExerciseSetResult par exercice, 1RM max
+        if isMinimal {
+            sections.append("Records (PRs): non fournis pour économiser les tokens. Si nécessaire, demande-moi.")
+            sections.append("Bibliothèque d'exercices: disponible côté app. Si tu as besoin de suggérer un nouvel exercice, demande une précision.")
+            return sections.joined(separator: "\n\n")
+        }
+
+        // Records (PRs) — uniquement les 5 derniers PRs significatifs.
         let setResultFetch = FetchDescriptor<ExerciseSetResult>(
             sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
@@ -249,12 +266,22 @@ final class AICoachViewModel {
         } else {
             let prLines = prByExercise
                 .sorted { $0.value.oneRM > $1.value.oneRM }
-                .prefix(15)
+                .prefix(5)
                 .map { "\($0.key): 1RM estimé \(String(format: "%.1f", $0.value.oneRM)) kg (\(formatDate($0.value.date)))" }
             sections.append("Records (PRs): " + prLines.joined(separator: "; "))
         }
 
+        // Indication sur la bibliothèque d'exercices sans lister les 172 entrées.
+        sections.append("Bibliothèque d'exercices: disponible côté app. Si tu as besoin de suggérer un nouvel exercice, reste général (par exemple « renforcement bas du corps ») ou demande une précision à l'utilisateur. Ne crée pas de nouveaux noms d'exercices.")
+
         return sections.joined(separator: "\n\n")
+    }
+
+    private func shouldUseMinimalContext(for userMessage: String) -> Bool {
+        let trimmed = userMessage.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard trimmed.count <= 12 else { return false }
+        let smallTalk = ["salut", "hello", "yo", "coucou", "hey", "bonjour", "bonsoir", "ça va", "cv"]
+        return smallTalk.contains { trimmed.contains($0) }
     }
 
     private func formatDate(_ date: Date) -> String {

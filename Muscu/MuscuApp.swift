@@ -40,6 +40,7 @@ struct MuscuApp: App {
 struct RootView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showMainApp: Bool = false
+    @State private var didRunNuclearCleanup: Bool = false
 
     var body: some View {
         Group {
@@ -56,6 +57,11 @@ struct RootView: View {
             }
         }
         .onAppear {
+            // Purge physique des anciens modèles (Mistral / LLM) une seule fois au lancement.
+            if !didRunNuclearCleanup {
+                DataController.nuclearCleanup()
+                didRunNuclearCleanup = true
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 withAnimation(.easeInOut(duration: 0.4)) {
                     showMainApp = true
