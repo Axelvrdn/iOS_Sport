@@ -142,15 +142,12 @@ private struct WaveformView: View {
 
 /// Clé AppStorage pour activer/désactiver la synthèse vocale du coach.
 let isAICoachVoiceEnabledKey = "isAICoachVoiceEnabled"
-/// Clé AppStorage pour activer l'IA locale (modèle lourd type MLX). Nécessite 8 Go RAM (iPhone 15 Pro / M1+).
-let localAIEnabledKey = "localAIEnabled"
 
 struct AICoachView: View {
     let strictnessLevel: Double
     var activeProgram: TrainingProgram?
 
     @AppStorage(isAICoachVoiceEnabledKey) private var isVoiceEnabled: Bool = false
-    @AppStorage(localAIEnabledKey) private var localAIEnabled: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accentColor) private var accentColor
     @Environment(\.textOnAccentColor) private var textOnAccentColor
@@ -264,14 +261,9 @@ struct AICoachView: View {
             .onAppear {
                 viewModel.activeProgram = activeProgram
                 viewModel.modelContext = modelContext
-                // L’IA utilise désormais uniquement l’API distante ; le flag localAIEnabled n’active que le coach ou le moteur de règles.
-                viewModel.useLocalAIModel = localAIEnabled
             }
             .onChange(of: activeProgram) { _, newProgram in
                 viewModel.activeProgram = newProgram
-            }
-            .onChange(of: localAIEnabled) { _, enabled in
-                viewModel.useLocalAIModel = enabled
             }
             .navigationTitle("AI Coach")
             .navigationBarTitleDisplayMode(.inline)
